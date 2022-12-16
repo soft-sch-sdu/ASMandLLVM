@@ -4,7 +4,7 @@ OBJS=$(SRCS: .cpp	= .o)
 TIME = $(shell date)
 
 2023spring: $(OBJS)
-	clang++ $(CFLAGS) -Wall -o $@ $^ $(LDFLAGS)
+	clang++ $(CFLAGS)  -o $@ $^ $(LDFLAGS)
 	@echo "$(TIME)"
 
 test:
