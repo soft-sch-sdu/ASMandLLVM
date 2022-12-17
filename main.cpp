@@ -119,7 +119,7 @@ std::deque<TOKEN> Lexer::gatherAllTokens() {
         currentToken = getNextToken();
         tokenList.emplace_back(currentToken);
     } while (currentToken.type != TK_EOF);
-    pos = 0;   //reset to 0, to make sure that parser will work properly
+    pos = 0;   //reset to 0, to make sure that the parser will work properly
     return tokenList;
 }
 
@@ -127,8 +127,8 @@ std::deque<TOKEN> Lexer::gatherAllTokens() {
 // AST nodes and abstract visitor
 //===----------------------------------------------------------------------===//
 
-// these node classes appear in class Visitor, and have to be declared here first
-// their definitions appear shortly after
+// the names of these node classes appear in the definition of class Visitor, and have to be declared here first
+// their own definitions appear shortly after
 class IntAST_Node;
 class FloatAST_Node;
 class BinaryOperator_Node;
@@ -142,16 +142,19 @@ public:
 
 /// AST_Node - Base class for all AST nodes.
 class AST_Node {
+    TOKEN token;
 public:
+    virtual TOKEN getToken() { return token; }
     virtual ~AST_Node() = default;
 
-    virtual void accept(class Visitor &v) = 0;
+    virtual void accept(Visitor &v) = 0;
 };
 
 /// IntAST_Node - Class for integer literals like 1, 2, 10,
 class IntAST_Node : public AST_Node {
 public:
     TOKEN token;
+    TOKEN getToken() override { return token;}
     explicit IntAST_Node(TOKEN tok) : token(std::move(tok)) {}
 
     void accept(Visitor &v) override { v.visit(*this); }
@@ -161,6 +164,7 @@ public:
 class FloatAST_Node : public AST_Node {
 public:
     TOKEN token;
+    TOKEN getToken() override { return token;}
     explicit FloatAST_Node(TOKEN tok) : token(std::move(tok)) {}
 
     void accept(Visitor &v) override { v.visit(*this); }
@@ -263,13 +267,39 @@ public:
     }
 
     void visit(FloatAST_Node& node) override {
-        fprintf(stderr, "%s : type %d\n", node.token.lexeme.c_str(),
-                node.token.type);
+        union {double f64; uint64_t u64;} u;
+        u.f64 = strtod(node.token.lexeme.c_str(), nullptr);
+        std::cout << "  mov $" << u.u64 << ", %rax   # float" << u.f64 << "\n";
+        std::cout << "  movq %rax, %xmm0\n";
     }
 
     void visit(BinaryOperator_Node& node) override {
+        TOKEN token = node.left->getToken();
+        if (token.type == TK_FLOAT_LITERAL) {
+            node.right->accept(*this);
+            std::cout << "  sub $8, %rsp" << std::endl;
+            std::cout << "  movsd %xmm0, (%rsp)" << std::endl;
+            node.left->accept(*this);
+            std::cout << "  movsd (%rsp), %xmm1" << std::endl;
+            std::cout << "  add $8, %rsp" << std::endl;
+
+            switch (node.token.type) {
+                case TK_PLUS:
+                    std::cout << "  addsd %xmm1, %xmm0" << std::endl;
+                    return;
+                case TK_MINUS:
+                    std::cout << "  subsd %xmm1, %xmm0" << std::endl;
+                    return;
+                default:
+                    break;
+            }
+        }
+
+
+        // first right,
         node.right->accept(*this);
         std::cout << "  push %rax" << std::endl;
+        // then left, otherwise, wrong
         node.left->accept(*this);
         std::cout << "  pop %rdi" << std::endl;
         switch (node.token.type) {
@@ -348,3 +378,5 @@ int main(int argc, char *argv[]) {
     CodeGenerator code_generator;
     code_generator.code_generate(*tree);
 }
+
+
