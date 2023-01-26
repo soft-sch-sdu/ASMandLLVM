@@ -1,1 +1,1 @@
-int fun(){int i=81;} float another() {21.1;}
+int main(){return fun(5, 7);} int fun(int i, int j) {return i;}
