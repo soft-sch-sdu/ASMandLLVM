@@ -34,7 +34,7 @@ assert 81 "int main(float kk, int h){int i=81;}  float another() {21;}"
 assert 2 "int main(float kk, int h){h =2; h;}  float another() {21;}"
 assert 11 "int main(){return 5+6;}"
 assert 5 "int main(){return fun(5, 7);} int fun(int i, int j) {return i;}"
-assert 7 "int main(){return fun(5, 7);} int fun(int i, int j) {return j;}"
+assert 7 "void main(){return fun(5, 7);} int fun(int i, int j) {return j;}"
 assert 33 "int main() {
                 return foo(11,22);
              }

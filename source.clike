@@ -1,1 +1,1 @@
-int main(){return fun(5, 7);} int fun(int i, int j) {return i;}
+void main(){ float i; return ;}

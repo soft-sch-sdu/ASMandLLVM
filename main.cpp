@@ -19,25 +19,16 @@ typedef enum base_type {
     base_type_int,
     base_type_float,
     base_type_bool,
+    base_type_void,
 } base_type;
 
+
+// main()函数负责把源代码读入input_string，即字符流，做为Lexer的输入
+static std::string input_string;
 
 //===----------------------------------------------------------------------===//
 // Lexer
 //===----------------------------------------------------------------------===//
-
-// main()函数负责把源代码读入input_string，即字符流
-static std::string input_string;
-// 字符流指针
-static long pos = 0;
-
-static char getChar() {
-    return input_string[pos++];
-}
-
-static void put_backChar() {
-    pos--;
-};
 
 enum TOKEN_TYPE {
     TK_INT_LITERAL = -1,            // [0-9]+
@@ -48,6 +39,7 @@ enum TOKEN_TYPE {
     TK_INT = -5,                    // int
     TK_FLOAT = -6,                  // float
     TK_BOOL = -7,                   // bool
+    TK_VOID = -17,                  // void
     TK_TRUE = -8,                   // true
     TK_FALSE = -9,                  // false
     TK_RETURN = -16,                // return
@@ -87,12 +79,19 @@ struct TOKEN {
 
 
 class Lexer {
+private:
+    // 字符流指针
+    long pos = 0;
+    // getChar()和put_backChar()两个辅助函数
+    char getChar() { return input_string[pos++]; }
+    void put_backChar() { pos--; };
+
 public:
     std::vector<TOKEN> tokenList;
-public:
-    static TOKEN getNextToken();
 
-    static std::vector<TOKEN> gatherAllTokens();
+    TOKEN getNextToken();
+
+    std::vector<TOKEN> gatherAllTokens();
 };
 
 // getNextToken - Return the next token from input_string.
@@ -149,12 +148,14 @@ TOKEN Lexer::getNextToken() {
             return TOKEN{TK_FLOAT, IdentifierString};
         if (IdentifierString == "bool")
             return TOKEN{TK_BOOL, IdentifierString};
+        if (IdentifierString == "void")
+            return TOKEN{TK_VOID, IdentifierString};
         if (IdentifierString == "true" || IdentifierString == "false")
             return TOKEN{TK_BOOL_LITERAL, IdentifierString};
         if (IdentifierString == "return")
             return TOKEN{TK_RETURN, IdentifierString};
 
-        // otherwise, normal identifiers
+        // otherwise, identifiers
         return TOKEN{TK_IDENTIFIER, IdentifierString};
     }
 
@@ -293,7 +294,6 @@ std::vector<TOKEN> Lexer::gatherAllTokens() {
         currentToken = getNextToken();
         tokenList.push_back(currentToken);
     } while (currentToken.type != TK_EOF);
-    pos = 0;
     return tokenList;
 }
 
@@ -334,16 +334,16 @@ class ScopedSymbolTable {
 public:
     // map是基于红黑树的数据结构，也可以用基于哈希表的unordered_map
     std::map<std::string, std::shared_ptr<Symbol>> symbols;
-    std::string scope_name;
+//    std::string scope_name;  这个属性就不要了，因为block没有名字
     int level;
     std::shared_ptr<ScopedSymbolTable> enclosing_scope;
 
     ScopedSymbolTable(std::map<std::string, std::shared_ptr<Symbol>> syms,
-                      std::string name,
+//                      std::string name,
                       int scope_level,
                       std::shared_ptr<ScopedSymbolTable> top_scope
     ) : symbols(std::move(syms)),
-        scope_name(std::move(name)),
+//        scope_name(std::move(name)),
         level(scope_level),
         enclosing_scope(std::move(top_scope)) {}
 
@@ -440,7 +440,7 @@ public:
 /// AST_Node - Base class for all AST nodes.
 class AST_Node {
 public:
-    base_type b_type = base_type_int;
+    base_type b_type = base_type_void;
 
     virtual ~AST_Node() = default;
 
@@ -467,7 +467,7 @@ public:
     void accept(Visitor &v) override { v.visit(*this); }
 };
 
-/// BoolLiteral_AST_Node - Class for boolen literals: true or false
+/// BoolLiteral_AST_Node - Class for boolean literals: true or false
 class BoolLiteral_AST_Node : public AST_Node {
 public:
     std::string literal;
@@ -637,7 +637,7 @@ class Parser {
     Lexer lexer;
     TOKEN CurrentToken;
     std::vector<TOKEN> tokenList;
-    long pos = 0;
+    long pos = 0; // Token流指针
     std::string currentFunctionName;
 public:
     explicit Parser(Lexer lex) : lexer(std::move(lex)) {
@@ -723,13 +723,12 @@ std::shared_ptr<AST_Node> Parser::primary() {
     // identifier func_args?
     // func_args = "(" (expression ("," expression)*)? ")"
     if (CurrentToken.type == TK_IDENTIFIER) {
-        std::string name = CurrentToken.lexeme;
-        auto node = std::make_shared<Variable_AST_Node>(name);
+        std::string name = CurrentToken.lexeme;  // name of variable or function
         eatCurrentToken();
         // function call
         if (CurrentToken.type == TK_LPAREN) {
             eatCurrentToken();  // eat "("
-            std::string functionName = node->var_name;
+            std::string functionName = name;
             std::vector<std::shared_ptr<AST_Node>> actualParamNodes;
             while (CurrentToken.type != TK_RPAREN) {
                 auto paramNode = expression();
@@ -739,7 +738,8 @@ std::shared_ptr<AST_Node> Parser::primary() {
             eatCurrentToken();   // eat ")"
             return std::make_shared<FunctionCall_AST_Node>(name, actualParamNodes);
         }
-        return node;
+        // Variable
+        return std::make_shared<Variable_AST_Node>(name);
     }
 
     // error!
@@ -857,9 +857,8 @@ std::shared_ptr<AST_Node> Parser::expression_statement() {
     return node;
 }
 
-// type-suffix  :=  ϵ | ("[" expression "]")? ("[" expression "]")? ";"
-
 // declarator  := identifier type-suffix
+// type-suffix  :=  ϵ | ("[" expression "]")? ("[" expression "]")? ";"
 std::shared_ptr<AST_Node> Parser::declarator() {
     if (CurrentToken.type == TK_IDENTIFIER) {
         auto node = std::make_shared<Variable_AST_Node>(std::move(CurrentToken.lexeme));
@@ -870,7 +869,7 @@ std::shared_ptr<AST_Node> Parser::declarator() {
     // 暂时不考虑type-suffix，等处理数组的时候再考虑
 }
 
-// type_specification := "int" | "float" | "bool"
+// type_specification := "int" | "float" | "bool" | "void"
 std::shared_ptr<AST_Node> Parser::type_specification() {
     if (CurrentToken.type == TK_INT) {
         eatCurrentToken();
@@ -883,6 +882,10 @@ std::shared_ptr<AST_Node> Parser::type_specification() {
     if (CurrentToken.type == TK_BOOL) {
         eatCurrentToken();
         return std::make_shared<Type_AST_Node>("bool");
+    }
+    if (CurrentToken.type == TK_VOID) {
+        eatCurrentToken();
+        return std::make_shared<Type_AST_Node>("void");
     }
     fprintf(stderr, "%s is not a type\n", (CurrentToken.lexeme).c_str());
     return nullptr;
@@ -998,7 +1001,8 @@ std::shared_ptr<AST_Node> Parser::program() {
     std::vector<std::shared_ptr<VariableDeclarations_AST_Node>> variableDeclarationsList;
     std::vector<std::shared_ptr<FunctionDeclaration_AST_Node>> functionDeclarationList;
     while (CurrentToken.type != TK_EOF) {
-        if (CurrentToken.type == TK_INT || CurrentToken.type == TK_FLOAT || CurrentToken.type == TK_BOOL) {
+        if (CurrentToken.type == TK_INT || CurrentToken.type == TK_FLOAT ||
+            CurrentToken.type == TK_BOOL || CurrentToken.type == TK_VOID) {
             eatCurrentToken();
             if (CurrentToken.type == TK_IDENTIFIER) {
                 eatCurrentToken();
@@ -1030,7 +1034,6 @@ std::shared_ptr<AST_Node> Parser::program() {
  * 2. 因为函数只能一个一个的声明，就简洁好理解了。
  */
 
-
 /******************** CFG (c-like)************************************
  *
  * program  :=  (variable_declaration | function_declaration)*
@@ -1043,7 +1046,7 @@ std::shared_ptr<AST_Node> Parser::program() {
  *                  | "return" expression-statement
  *                  | block
  * variable_declaration  :=  type_specification declarator ("=" expression)? ("," declarator ("=" expression)?)* ";"
- * type_specification  :=  "int" | "float" | "bool"
+ * type_specification  :=  "int" | "float" | "bool" | "void"
  * declarator  :=  identifier type-suffix
  * expression_statement  :=  expression? ";"
  * expression  :=  equality ("=" expression)?
@@ -1086,7 +1089,12 @@ public:
     }
 
     void visit(Return_AST_Node &node) override {
-        node.expression->accept(*this);
+        // case: "return ;"
+        if (node.expression == nullptr) node.b_type = base_type_void;
+        else { // other cases:
+            node.expression->accept(*this);
+            node.b_type = node.expression->b_type;
+        }
     }
 
     void visit(Assignment_AST_Node &node) override {
@@ -1115,6 +1123,7 @@ public:
         if (node.type_name == "int") node.b_type = base_type_int;
         else if (node.type_name == "float") node.b_type = base_type_float;
         else if (node.type_name == "bool") node.b_type = base_type_bool;
+        else if (node.type_name == "void") node.b_type = base_type_void;
     }
 
     void visit(SingleVariableDeclaration_AST_Node &node) override {
@@ -1159,9 +1168,7 @@ public:
             for (auto &n: node.statements) n->accept(*this);
     }
 
-    void visit(FunctionCall_AST_Node &node) override {
-//        node.accept(*this);
-    }
+    void visit(FunctionCall_AST_Node &node) override { }
 
     void visit(Parameter_AST_Node &node) override {
         // 类型
@@ -1179,14 +1186,17 @@ public:
 
     void visit(FunctionDeclaration_AST_Node &node) override {
         offsetSum = 0;  // 为每个函数初始化offsetSum
-        auto sym = std::make_shared<Function_Symbol>(node.funcName, node.funcType);
-        currentScope->insert(sym);
 
-        // 创建function scope symboltable
+        // 创建function scope symbol_table
         std::map<std::string, std::shared_ptr<Symbol>> symbols;
-        auto scope = std::make_shared<ScopedSymbolTable>(std::move(symbols), node.funcName, currentScope->level + 1, nullptr);
+//        auto scope = std::make_shared<ScopedSymbolTable>(std::move(symbols), node.funcName, currentScope->level + 1, nullptr);
+        auto scope = std::make_shared<ScopedSymbolTable>(std::move(symbols), currentScope->level + 1, nullptr);
         scope->enclosing_scope = currentScope;
         currentScope = scope;
+
+        // 将function symbol插入symbols
+        auto sym = std::make_shared<Function_Symbol>(node.funcName, node.funcType);
+        currentScope->insert(sym);
 
         // 遍历形参列表
         for (auto &eachParam : node.formalParams )
@@ -1199,13 +1209,14 @@ public:
     void visit(Program_AST_Node &node) override {
         // 创建global scope (program) symboltable
         std::map<std::string, std::shared_ptr<Symbol>> symbols;
-        auto globalScope = std::make_shared<ScopedSymbolTable>(std::move(symbols), "global_scope", 0, nullptr);
+//        auto globalScope = std::make_shared<ScopedSymbolTable>(std::move(symbols), "global_scope", 0, nullptr);
+        auto globalScope = std::make_shared<ScopedSymbolTable>(std::move(symbols), 0, nullptr);
         currentScope = std::move(globalScope);
 
         if (node.varDeclarationsList.size() != 0)
-            for (auto &n: node.varDeclarationsList) n->accept(*this);
+            for (auto &var: node.varDeclarationsList) var->accept(*this);
         if (node.funcDeclarationList.size() != 0)
-            for (auto &n: node.funcDeclarationList) n->accept(*this);
+            for (auto &func: node.funcDeclarationList) func->accept(*this);
     }
 };
 
@@ -1248,7 +1259,7 @@ public:
     }
 
     void visit(Return_AST_Node &node) override {
-        node.expression->accept(*this);
+        if (node.expression != nullptr) node.expression->accept(*this);
         std::cout << "  jmp ." << node.functionName << ".return\n";
     }
 
@@ -1359,6 +1370,7 @@ public:
             std::cout << "  push %rax\n";
         }
 
+        // 从右往左，将实参传入寄存器
         for (int i = node.arguments.size(); i > 0; i--)
             std::cout << "  pop %" << parameter_registers[i-1] << std::endl;
 
@@ -1372,7 +1384,7 @@ public:
 
     void visit(FunctionDeclaration_AST_Node &node) override {
         // Prologue
-        std::cout << "  .text\n";
+        std::cout << "\n" << "  .text\n";
         std::cout << "  .global " << node.funcName << std::endl;
         std::cout << node.funcName << ":\n";
         std::cout << "  push %rbp\n";
@@ -1381,6 +1393,7 @@ public:
         if (stack_size != 0)
             std::cout << "  sub $" << stack_size << ", %rsp\n";
 
+        // 从左往右，将参数由寄存器压入栈
         int i = 0;
         for (auto& param : node.formalParams) {
             std::shared_ptr<Parameter_AST_Node> p = std::dynamic_pointer_cast<Parameter_AST_Node>(param);
@@ -1418,7 +1431,8 @@ int main(int argc, char *argv[]) {
     if (argc == 2) {
         /* source code can be read from one of two places:
          * 1. standard input terminal. As in test.sh, it's represented by "-".
-         *    This approach is convenient for testing many cases by running "make test" command.
+         *    This approach is convenient for testing a large number of cases
+         *    by running "make test" command.
          * 2. a file. This approach is convenient for debugging a single test case.
          * */
         // for convenience, source code will be read into a string
@@ -1426,7 +1440,7 @@ int main(int argc, char *argv[]) {
         std::ostringstream out;  // this var is auxiliary
         if (strcmp(argv[1], "-") == 0) {  // "-" is exactly the string in argv[1]
             out << std::cin.rdbuf();
-        } else {   // the string in argv[1] is the name of test file
+        } else {   // argv[1] is the name of test file
             std::ifstream fin(argv[1]);
             out << fin.rdbuf();
             fin.close();
@@ -1439,11 +1453,10 @@ int main(int argc, char *argv[]) {
 
     // 词法分析
     Lexer lexer;
-
 //    // 打印所有的tokens
-//    for (auto &curToken: lexer.gatherAllTokens()) {
-//        fprintf(stderr, "%s : type %d\n", curToken.lexeme.c_str(),
-//                curToken.type);
+//    for (auto &currentToken: lexer.gatherAllTokens()) {
+//        fprintf(stderr, "%s : type %d\n", currentToken.lexeme.c_str(),
+//                currentToken.type);
 //    }
 
     // 语法分析 
