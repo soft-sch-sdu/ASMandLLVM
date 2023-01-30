@@ -18,6 +18,8 @@ assert() {
 
 # test cases with int only (without floats)
 assert 10 "int main(){10;}"
+assert 7 "int main() {7;}"
+assert 7 "int main() {{} { {7;} }}"
 assert 47 "int main(){42 + 10 -5;}"
 assert 57 "int main(){42 + 10 --5;}"
 assert 15 "int main(){42 + 10 -5; 8+7;}"
@@ -33,14 +35,15 @@ assert 0 "int main(){bool i=true;;bool k,s, j=false;}"
 assert 81 "int main(float kk, int h){int i=81;}  float another() {21;}"
 assert 2 "int main(float kk, int h){h =2; h;}  float another() {21;}"
 assert 11 "int main(){return 5+6;}"
-assert 5 "int main(){return fun(5, 7);} int fun(int i, int j) {return i;}"
-assert 7 "void main(){return fun(5, 7);} int fun(int i, int j) {return j;}"
-assert 33 "int main() {
+assert 5 "int fun(int i, int j) {return i;} int main(){return fun(5, 1);} "
+assert 7 "int fun(int i, int j) {return j;} int main(){return fun(5, 7);} "
+assert 33 "int foo(int a, int b){
+                           return a+b;
+                        }
+                        int main() {
                 return foo(11,22);
              }
-             int foo(int a, int b){
-                return a+b;
-             }"
+"
 
 assert 21  "int foo(int a, int b, int c, int d, int e, int f){
                   return a+b+c+d+e+f;

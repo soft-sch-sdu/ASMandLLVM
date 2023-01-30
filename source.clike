@@ -1,1 +1,5 @@
-void main(){ float i; return ;}
+int fun(float i, float j, int k) {return (i+j)*k;}
+
+int main(){return fun(5.1, 1.7, 1);}
+
+
