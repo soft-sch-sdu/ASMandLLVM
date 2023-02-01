@@ -1,0 +1,9 @@
+int g = 7;
+int fun(float i, float j, int k) {return h1 + (i+j)*k;}
+int fun1(int kkk) {return 6;}
+int main(){return fun(5.1, 1.7, 1);}
+float h1 = 1.3; float h2;
+
+
+
+

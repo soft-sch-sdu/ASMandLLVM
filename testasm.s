@@ -24,8 +24,29 @@ fun:
   movsd (%rsp), %xmm1
   add $8, %rsp
   mulsd %xmm1, %xmm0
+  sub $8, %rsp
+  movsd %xmm0, (%rsp)
+  lea h1(%rip), %rax
+  movsd (%rax), %xmm0
+  movsd (%rsp), %xmm1
+  add $8, %rsp
+  addsd %xmm1, %xmm0
   jmp L.fun.return
 L.fun.return:
+  mov %rbp, %rsp
+  pop %rbp
+  ret
+
+  .text
+  .global fun1
+fun1:
+  push %rbp
+  mov %rsp, %rbp
+  sub $16, %rsp
+  mov %rdi, -8(%rbp)
+  mov $6, %rax
+  jmp L.fun1.return
+L.fun1.return:
   mov %rbp, %rsp
   pop %rbp
   ret
@@ -54,13 +75,18 @@ main:
   call fun
   jmp L.main.return
 L.main.return:
-  lea format(%rip), %rdi
- # mov %rax, %rsi
+  lea printf_format, %rdi
   call printf
   mov %rbp, %rsp
   pop %rbp
   ret
 
   .data
- format:
-  .string "%f\n"
+g:
+  .long 7
+h1:
+  .double 1.4
+h2:
+  .double 0
+printf_format:
+  .string   "%f\n"

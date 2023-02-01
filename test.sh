@@ -53,4 +53,7 @@ assert 21  "int foo(int a, int b, int c, int d, int e, int f){
                   return foo(1,2,3,4,5,6);
              }"
 
+assert 26  " int g = 17;
+             int main(){ return 9 + g; }"
+
 echo OK
