@@ -23,8 +23,10 @@ typedef enum base_type {
     base_type_void,
 } base_type;
 
-//bool print_it = true; //assembly code
-bool print_it = false;
+base_type return_type_of_current_function;
+
+bool print_it = true; //assembly code
+//bool print_it = false;
 
 // main()函数负责把源代码读入input_string，即字符流，做为Lexer的输入.
 static std::string input_string;
@@ -89,6 +91,7 @@ private:
 
     // getChar()读取当前字符，并将字符流指针后移.
     char getChar() { return input_string[pos++]; }
+
     TOKEN getNextToken();
 
 public:
@@ -108,21 +111,18 @@ TOKEN Lexer::getNextToken() {
 
     // skip comments
     while (CurrentChar == '/') {
-        CurrentChar = getChar();
-        if (CurrentChar == '/') {       // 处理单行注释
-            CurrentChar = getChar();
-            while (CurrentChar != '\n' && input_string.length() >= pos) CurrentChar = getChar();
+        if ((CurrentChar = getChar()) == '/') {       // 处理单行注释
+            while ((CurrentChar = getChar()) != '\n' && input_string.length() >= pos)
+                continue;//CurrentChar = getChar();
         } else if (CurrentChar == '*') { // 处理多行注释
-            CurrentChar = getChar();
-            if (CurrentChar == '/') {
+            if ((CurrentChar = getChar()) == '/') {
                 fprintf(stderr, "comments error: missing '*' before '/'\n");
                 exit(1);
             }
             while (CurrentChar != '/') CurrentChar = getChar();
             if (CurrentChar == '/') {
                 pos -= 2;
-                CurrentChar = getChar();
-                if (CurrentChar != '*') {
+                if ((CurrentChar = getChar()) != '*') {
                     fprintf(stderr, "comments error: missing '*' before '/'\n");
                     exit(1);
                 } else {
@@ -132,9 +132,7 @@ TOKEN Lexer::getNextToken() {
             }
         }
         // 跳过注释后的空白符.
-        while (isspace(CurrentChar)) {
-            CurrentChar = getChar();
-        }
+        while (isspace(CurrentChar)) CurrentChar = getChar();
     }
 
     // int or float number
@@ -1114,10 +1112,12 @@ public:
             fprintf(stderr, "something wrong! info about function %s is missing\n", node.functionName.c_str());
             exit(1);
         }
-        // 类型不一致，则为用户提供warning信息
-        if (node.b_type != functionSymbol->type)
-            fprintf(stderr, "return type is not the type of function \"%s\".\n", node.functionName.c_str());
-            // 类型转换也可以放在visit BinaryOperation的时候进行
+        // 类型不一致，则为用户提供warning信息，并记录实际返回值类型
+        if (node.b_type != functionSymbol->type) {
+            fprintf(stderr, "type returned does not match the type of function \"%s\".\n", node.functionName.c_str());
+            return_type_of_current_function = node.b_type;
+        }
+               // 类型转换也可以放在visit BinaryOperation的时候进行
         // 下面这种不一致有点严重，退出
         if (node.b_type == base_type_void && functionSymbol->type != base_type_void) {
             fprintf(stderr, "return type of %s should not be void!\n", node.functionName.c_str());
@@ -1313,43 +1313,43 @@ public:
 
     void visit(NumLiteral_AST_Node &node) override {
         if (node.b_type == base_type_int)
-            std::cout << "  mov $" << node.literal << ", %rax\n";
+            std::cout << "    mov $" << node.literal << ", %rax\n";
         else if (node.b_type == base_type_float) {
             union {
                 double f64;
                 uint64_t u64;
             } u{};
             u.f64 = strtod(node.literal.c_str(), nullptr);
-            std::cout << "  mov $" << u.u64 << ", %rax   # float " << u.f64 << "\n";
-            std::cout << "  movq %rax, %xmm0\n";
+            std::cout << "    mov $" << u.u64 << ", %rax   # float " << u.f64 << "\n";
+            std::cout << "    movq %rax, %xmm0\n";
         } else if (node.b_type == base_type_bool) {
             // like c, 1 stands for true, and 0 stands for false
-            if (node.literal == "true") std::cout << "  mov $1, %rax\n";
-            else std::cout << "  mov $0, %rax\n";
+            if (node.literal == "true") std::cout << "    mov $1, %rax\n";
+            else std::cout << "    mov $0, %rax\n";
         }
     }
 
     void visit(Return_AST_Node &node) override {
         if (node.expression != nullptr) node.expression->accept(*this);
-        std::cout << "  jmp L." << node.functionName << ".return\n";
+        std::cout << "    jmp L." << node.functionName << ".return\n";
     }
 
     void visit(Assignment_AST_Node &node) override {
         // the left-side of "=" should be a left-value
         // so get its address in memory
         int var_offset = std::dynamic_pointer_cast<Variable_AST_Node>(node.left)->symbol->offset;
-        std::cout << "  lea " << var_offset << "(%rbp), %rax\n";
+        std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
         // put its address to the top of stack
-        std::cout << "  push %rax\n";
+        std::cout << "    push %rax\n";
 
         node.right->accept(*this);
-        std::cout << "  pop %rdi\n";
+        std::cout << "    pop %rdi\n";
         // 若right-side是int类型的结果，则位于%rax; 若是float类型，则位于%xxm0
         if (node.b_type == base_type_float) { // float类型的结果
             if (node.right->b_type < base_type_float) // 若%rax参与float类型的运算，
-                std::cout << "  cvtsi2sd %rax, %xmm0\n"; // 则需将之转换成float类型，并放入%xmm0
-            std::cout << "  movsd %xmm0, (%rdi)\n";
-        } else std::cout << "  mov %rax, (%rdi)\n"; // int or bool, 即int类型的结果
+                std::cout << "    cvtsi2sd %rax, %xmm0\n"; // 则需将之转换成float类型，并放入%xmm0
+            std::cout << "    movsd %xmm0, (%rdi)\n";
+        } else std::cout << "    mov %rax, (%rdi)\n"; // int or bool, 即int类型的结果
     }
 
     void visit(BinaryOperator_AST_Node &node) override {
@@ -1357,52 +1357,52 @@ public:
         if (node.b_type == base_type_float) {
             node.right->accept(*this);
             if (node.right->b_type < base_type_float) { // convert int to float
-                std::cout << "  cvtsi2sd %rax, %xmm0" << std::endl;
+                std::cout << "    cvtsi2sd %rax, %xmm0" << std::endl;
             }
             // push float
-            std::cout << "  sub $8, %rsp" << std::endl;
-            std::cout << "  movsd %xmm0, (%rsp)" << std::endl;
+            std::cout << "    sub $8, %rsp" << std::endl;
+            std::cout << "    movsd %xmm0, (%rsp)" << std::endl;
 
             node.left->accept(*this);
             if (node.left->b_type < base_type_float) { // convert int to float
-                std::cout << "  cvtsi2sd %rax, %xmm0" << std::endl;
+                std::cout << "    cvtsi2sd %rax, %xmm0" << std::endl;
             }
             // pop float
-            std::cout << "  movsd (%rsp), %xmm1" << std::endl;
-            std::cout << "  add $8, %rsp" << std::endl;
+            std::cout << "    movsd (%rsp), %xmm1" << std::endl;
+            std::cout << "    add $8, %rsp" << std::endl;
 
-            if (node.operation == "+") std::cout << "  addsd %xmm1, %xmm0" << std::endl;
-            else if (node.operation == "-") std::cout << "  subsd %xmm1, %xmm0" << std::endl;
-            else if (node.operation == "*") std::cout << "  mulsd %xmm1, %xmm0" << std::endl;
-            else if (node.operation == "/") std::cout << "  divsd %xmm1, %xmm0" << std::endl;
+            if (node.operation == "+") std::cout << "    addsd %xmm1, %xmm0" << std::endl;
+            else if (node.operation == "-") std::cout << "    subsd %xmm1, %xmm0" << std::endl;
+            else if (node.operation == "*") std::cout << "    mulsd %xmm1, %xmm0" << std::endl;
+            else if (node.operation == "/") std::cout << "    divsd %xmm1, %xmm0" << std::endl;
             return;
         }
 
         // int类型
         // first right,
         node.right->accept(*this);
-        std::cout << "  push %rax" << std::endl;
+        std::cout << "    push %rax" << std::endl;
         // then left, otherwise, wrong
         node.left->accept(*this);
-        std::cout << "  pop %rdi" << std::endl;
-        if (node.operation == "+") std::cout << "  add %rdi, %rax" << std::endl;
-        else if (node.operation == "-") std::cout << "  sub %rdi, %rax" << std::endl;
-        else if (node.operation == "*") std::cout << "  imul %rdi, %rax" << std::endl;
-        else if (node.operation == "/") std::cout << "  div %rdi, %rax" << std::endl;
+        std::cout << "    pop %rdi" << std::endl;
+        if (node.operation == "+") std::cout << "    add %rdi, %rax" << std::endl;
+        else if (node.operation == "-") std::cout << "    sub %rdi, %rax" << std::endl;
+        else if (node.operation == "*") std::cout << "    imul %rdi, %rax" << std::endl;
+        else if (node.operation == "/") std::cout << "    div %rdi, %rax" << std::endl;
     }
 
     void visit(UnaryOperator_AST_Node &node) override {
         node.right->accept(*this);
         if (node.operation == "-") {
             if (node.b_type == base_type_int)
-                std::cout << "  neg %rax" << std::endl;
+                std::cout << "    neg %rax" << std::endl;
             else {
                 // 下面的四步将一个float取负数，即实现 %xmm0 = (-1) * %xmm0.
                 // 有点啰嗦. chibicc有另一个解决方案，但是也需要四步，同样啰嗦.
-                std::cout << "  mov $1, %rax" << std::endl;
-                std::cout << "  neg %rax" << std::endl;
-                std::cout << "  cvtsi2sd %rax, %xmm1" << std::endl;
-                std::cout << "  mulsd %xmm1, %xmm0" << std::endl;
+                std::cout << "    mov $1, %rax" << std::endl;
+                std::cout << "    neg %rax" << std::endl;
+                std::cout << "    cvtsi2sd %rax, %xmm1" << std::endl;
+                std::cout << "    mulsd %xmm1, %xmm0" << std::endl;
             }
         }
     }
@@ -1423,14 +1423,14 @@ public:
         // 获取其在内存中的地址：
         int var_offset = node.symbol->offset;
         if (var_offset == 0)  // offset=0，则是全局变量，位于.data段
-            std::cout << "  lea " << node.var_name << "(%rip), %rax\n";
+            std::cout << "    lea " << node.var_name << "(%rip), %rax\n";
         else                  // 否则，是局部变量或参数，位于栈
-            std::cout << "  lea " << var_offset << "(%rbp), %rax\n";
+            std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
         // 然后，将其值放入寄存器
         if (node.b_type == base_type_float)          // 若是float，
-            std::cout << "  movsd (%rax), %xmm0\n";  // 其值放入%xmm0
+            std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0
         else if (node.b_type == base_type_int || node.b_type == base_type_bool) // 否则，
-            std::cout << "  mov (%rax), %rax\n";     // 其值放入%rax
+            std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax
     }
 
     void visit(Block_AST_Node &node) override {
@@ -1441,15 +1441,15 @@ public:
     void visit(FunctionCall_AST_Node &node) override {
         int float_num = 0, others_num = 0;
         // 实参入栈
-        for (auto & argument : node.arguments) {
+        for (auto &argument: node.arguments) {
             argument->accept(*this);
             if (argument->b_type == base_type_float) {
                 // push float
-                std::cout << "  sub $8, %rsp" << std::endl;
-                std::cout << "  movsd %xmm0, (%rsp)" << std::endl;
+                std::cout << "    sub $8, %rsp" << std::endl;
+                std::cout << "    movsd %xmm0, (%rsp)" << std::endl;
                 float_num += 1;
             } else {
-                std::cout << "  push %rax" << std::endl;
+                std::cout << "    push %rax" << std::endl;
                 others_num += 1;
             }
         }
@@ -1458,16 +1458,16 @@ public:
             if (node.arguments[j]->b_type == base_type_float) {
                 float_num = float_num - 1;
                 // pop float
-                std::cout << "  movsd (%rsp), %" << parameter_registers_float[float_num] << std::endl;
-                std::cout << "  add $8, %rsp" << std::endl;
+                std::cout << "    movsd (%rsp), %" << parameter_registers_float[float_num] << std::endl;
+                std::cout << "    add $8, %rsp" << std::endl;
             } else {
                 others_num = others_num - 1;
-                std::cout << "  pop %" << parameter_registers[others_num] << std::endl;
+                std::cout << "    pop %" << parameter_registers[others_num] << std::endl;
             }
         }
 
-        std::cout << "  mov $0, %rax\n";
-        std::cout << "  call " << node.funcName << std::endl;
+        std::cout << "    mov $0, %rax\n";
+        std::cout << "    call " << node.funcName << std::endl;
     }
 
     void visit(Parameter_AST_Node &node) override {
@@ -1476,22 +1476,22 @@ public:
 
     void visit(FunctionDeclaration_AST_Node &node) override {
         // Prologue
-        std::cout << "\n" << "  .text\n";
-        std::cout << "  .global " << node.funcName << std::endl;
+        std::cout << "\n" << "    .text\n";
+        std::cout << "    .global " << node.funcName << std::endl;
         std::cout << node.funcName << ":\n";
-        std::cout << "  push %rbp\n";
-        std::cout << "  mov %rsp, %rbp\n";
+        std::cout << "    push %rbp\n";
+        std::cout << "    mov %rsp, %rbp\n";
         int stack_size = align_to(node.offset, 16);
         if (stack_size != 0)
-            std::cout << "  sub $" << stack_size << ", %rsp\n";
+            std::cout << "    sub $" << stack_size << ", %rsp\n";
 
         // 从左往右，将参数由寄存器压入栈
         int i = 0, f = 0;
         for (auto &param: node.formalParams) {
             std::shared_ptr<Parameter_AST_Node> p = std::dynamic_pointer_cast<Parameter_AST_Node>(param);
             if (param->b_type == base_type_float)
-                std::cout << "  movq %" << parameter_registers_float[f++] << ", " << p->symbol->offset << "(%rbp)\n";
-            else std::cout << "  mov %" << parameter_registers[i++] << ", " << p->symbol->offset << "(%rbp)\n";
+                std::cout << "    movq %" << parameter_registers_float[f++] << ", " << p->symbol->offset << "(%rbp)\n";
+            else std::cout << "    mov %" << parameter_registers[i++] << ", " << p->symbol->offset << "(%rbp)\n";
         }
 
         node.funcBlock->accept(*this);
@@ -1500,19 +1500,21 @@ public:
 
         // 若想调用printf打印，则prepare“格式控制字符串”
         if (print_it && node.funcName == "main") {
-            std::cout << "  lea printf_format, %rdi\n";  // printf_format位于.data段
-            if (node.funcType->b_type == base_type_int) {  // 打印整数相关准备
-                std::cout << "  mov %rax, %rsi\n";
-                print_format_string = R"(  .string   "%d\n" )";
-            } else if (node.funcType->b_type == base_type_float) // 打印float相关准备
+            std::cout << "    lea printf_format, %rdi\n";  // printf_format位于.data段
+            if (return_type_of_current_function == base_type_float) // 打印float数值，准备格式串
                 print_format_string = R"(  .string   "%f\n" )";
-            std::cout << "  call printf\n"; // 调用printf外部函数
+            else
+            {  // 打印整数等数值，准备格式串
+                std::cout << "    mov %rax, %rsi\n";
+                print_format_string = R"(  .string   "%d\n" )";
+            }
+            std::cout << "    call printf\n"; // 调用printf外部函数
         }
 
         // Epilogue
-        std::cout << "  mov %rbp, %rsp\n";
-        std::cout << "  pop %rbp\n";
-        std::cout << "  ret\n";
+        std::cout << "    mov %rbp, %rsp\n";
+        std::cout << "    pop %rbp\n";
+        std::cout << "    ret\n";
     }
 
     void visit(Program_AST_Node &node) override {
@@ -1526,13 +1528,13 @@ void CodeGenerator::code_generate(AST_Node &tree) {
     tree.accept(*this);
 
     // global and static variables
-    std::cout << "\n" << "  .data\n";
+    std::cout << "\n" << "    .data\n";
     for (auto &gvar: globals) {
         std::cout << gvar.name << ":\n";
         if (gvar.type == base_type_int)
-            std::cout << "  .long " << gvar.initialValueLiteral << "\n";
+            std::cout << "    .long " << gvar.initialValueLiteral << "\n";
         else if (gvar.type == base_type_float)
-            std::cout << "  .double " << gvar.initialValueLiteral << "\n";
+            std::cout << "    .double " << gvar.initialValueLiteral << "\n";
     }
     // 若想调用printf打印，则在.data段的最后添加“格式控制字符串”
     if (print_it) {
