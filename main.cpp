@@ -87,11 +87,8 @@ private:
     // 字符流指针.
     long pos = 0;
 
-    // getChar()和put_backChar()是两个用于移动字符流指针的辅助函数.
+    // getChar()读取当前字符，并将字符流指针后移.
     char getChar() { return input_string[pos++]; }
-
-    void put_backChar() { pos--; };
-
     TOKEN getNextToken();
 
 public:
@@ -109,6 +106,37 @@ TOKEN Lexer::getNextToken() {
         CurrentChar = getChar();
     }
 
+    // skip comments
+    while (CurrentChar == '/') {
+        CurrentChar = getChar();
+        if (CurrentChar == '/') {       // 处理单行注释
+            CurrentChar = getChar();
+            while (CurrentChar != '\n' && input_string.length() >= pos) CurrentChar = getChar();
+        } else if (CurrentChar == '*') { // 处理多行注释
+            CurrentChar = getChar();
+            if (CurrentChar == '/') {
+                fprintf(stderr, "comments error: missing '*' before '/'\n");
+                exit(1);
+            }
+            while (CurrentChar != '/') CurrentChar = getChar();
+            if (CurrentChar == '/') {
+                pos -= 2;
+                CurrentChar = getChar();
+                if (CurrentChar != '*') {
+                    fprintf(stderr, "comments error: missing '*' before '/'\n");
+                    exit(1);
+                } else {
+                    pos += 2;
+                    CurrentChar = getChar();
+                }
+            }
+        }
+        // 跳过注释后的空白符.
+        while (isspace(CurrentChar)) {
+            CurrentChar = getChar();
+        }
+    }
+
     // int or float number
     if (isdigit(CurrentChar) || CurrentChar == '.') { // Number
         std::string NumberString;
@@ -118,7 +146,7 @@ TOKEN Lexer::getNextToken() {
                 NumberString += CurrentChar;
                 CurrentChar = getChar();
             } while (isdigit(CurrentChar));
-            put_backChar();
+            pos--;
             return TOKEN{TK_FLOAT_LITERAL, NumberString};
         } else {
             do { // Start of Number: [0-9]+
@@ -131,10 +159,10 @@ TOKEN Lexer::getNextToken() {
                     NumberString += CurrentChar;
                     CurrentChar = getChar();
                 } while (isdigit(CurrentChar));
-                put_backChar();
+                pos--;
                 return TOKEN{TK_FLOAT_LITERAL, NumberString};
             } else { // Integer : [0-9]+
-                put_backChar();
+                pos--;
                 return TOKEN{TK_INT_LITERAL, NumberString};
             }
         }
@@ -146,7 +174,7 @@ TOKEN Lexer::getNextToken() {
             IdentifierString += CurrentChar;
             CurrentChar = getChar();
         } while (isalnum(CurrentChar) || CurrentChar == '_');
-        put_backChar();
+        pos--;
 
         // if keywords
         if (IdentifierString == "int")
@@ -235,7 +263,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_EQ, s};
                 return token;
-            } else put_backChar();
+            } else pos--;
             TOKEN token = TOKEN{TK_ASSIGN, s};
             return token;
         }
@@ -246,7 +274,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_NE, s};
                 return token;
-            } else put_backChar();
+            } else pos--;
             TOKEN token = TOKEN{TK_NOT, s};
             return token;
         }
@@ -257,7 +285,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_LE, s};
                 return token;
-            } else put_backChar();
+            } else pos--;
             TOKEN token = TOKEN{TK_LT, s};
             return token;
         }
@@ -268,7 +296,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_GE, s};
                 return token;
-            } else put_backChar();
+            } else pos--;
             TOKEN token = TOKEN{TK_GT, s};
             return token;
         }
@@ -1411,11 +1439,11 @@ public:
     }
 
     void visit(FunctionCall_AST_Node &node) override {
-        int float_num = 0, others_num = 0, j;
+        int float_num = 0, others_num = 0;
         // 实参入栈
-        for (j = 0; j < node.arguments.size(); j++) {
-            node.arguments[j]->accept(*this);
-            if (node.arguments[j]->b_type == base_type_float) {
+        for (auto & argument : node.arguments) {
+            argument->accept(*this);
+            if (argument->b_type == base_type_float) {
                 // push float
                 std::cout << "  sub $8, %rsp" << std::endl;
                 std::cout << "  movsd %xmm0, (%rsp)" << std::endl;
@@ -1426,7 +1454,7 @@ public:
             }
         }
         // 实参分发转入寄存器
-        for (j = node.arguments.size() - 1; j >= 0; j--) {
+        for (int j = node.arguments.size() - 1; j >= 0; j--) {
             if (node.arguments[j]->b_type == base_type_float) {
                 float_num = float_num - 1;
                 // pop float
