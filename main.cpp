@@ -4,6 +4,7 @@
 // 做为字符流.
 #include <fstream>
 #include <sstream>
+//#include <stringstream>
 
 #include <cstring>
 #include <vector>
@@ -25,11 +26,25 @@ typedef enum base_type {
 
 base_type return_type_of_current_function;
 
-bool print_it = true; //assembly code
-//bool print_it = false;
+bool print_it = false; //assembly code
+
 
 // main()函数负责把源代码读入input_string，即字符流，做为Lexer的输入.
 static std::string input_string;
+
+static void print_line(int l, int c, std::string msg) {
+    std::stringstream ss(input_string);
+    std::string line_str;
+
+    for (long i = 0; i <= l; i++) std::getline(ss, line_str, '\n');
+
+    fprintf(stderr, "error at %d:%d\n", l+1, c+1);
+    fprintf(stderr, "%s\n", line_str.c_str());
+    for (int i = 0; i < c; i++)
+        fprintf(stderr, " ");
+    fprintf(stderr, "^ %s\n", msg.c_str());
+ }
+
 
 //===----------------------------------------------------------------------===//
 // Lexer
@@ -81,6 +96,9 @@ enum TOKEN_TYPE {
 struct TOKEN {
     int type = -999;
     std::string lexeme;
+    // for error reporting
+    int lineNo;
+    int columnNo;
 };
 
 
@@ -89,8 +107,19 @@ private:
     // 字符流指针.
     long pos = 0;
 
-    // getChar()读取当前字符，并将字符流指针后移.
-    char getChar() { return input_string[pos++]; }
+    int lineNo = 0;
+    int columnNo = 0;
+
+    // getChar()读取当前字符，并将指针沿字符流后移一个字符.
+    char getChar() {
+        columnNo++;
+        return input_string[pos++];
+    }
+
+    void put_backChar() {
+        pos--;
+        columnNo--;
+    }
 
     TOKEN getNextToken();
 
@@ -106,33 +135,56 @@ TOKEN Lexer::getNextToken() {
     char CurrentChar = getChar();
     // skip any whitespace.
     while (isspace(CurrentChar)) {
+        if (CurrentChar == '\n') {
+            lineNo++;
+            columnNo = 1;
+        }
         CurrentChar = getChar();
     }
 
     // skip comments
-    while (CurrentChar == '/') {
+    while (CurrentChar == '/') { // could be division or could be the start of a comment
         if ((CurrentChar = getChar()) == '/') {       // 处理单行注释
             while ((CurrentChar = getChar()) != '\n' && input_string.length() >= pos)
-                continue;//CurrentChar = getChar();
+                continue;
         } else if (CurrentChar == '*') { // 处理多行注释
             if ((CurrentChar = getChar()) == '/') {
-                fprintf(stderr, "comments error: missing '*' before '/'\n");
+//                fprintf(stderr, "comments error: missing '*' before '/' at line %d, column %d\n", lineNo+1,columnNo-1);
+                print_line(lineNo, columnNo-2, "missing '*' before '/'");
                 exit(1);
             }
-            while (CurrentChar != '/') CurrentChar = getChar();
+            while (CurrentChar != '/') {
+                if (CurrentChar == '\n') {
+                    lineNo++;
+                    columnNo = 1;
+                }
+                CurrentChar = getChar();
+            }
             if (CurrentChar == '/') {
-                pos -= 2;
+                put_backChar();
+                put_backChar();
                 if ((CurrentChar = getChar()) != '*') {
-                    fprintf(stderr, "comments error: missing '*' before '/'\n");
+//                    fprintf(stderr, "comments error: missing '*' before '/' at line %d, column %d\n", lineNo+1,columnNo-1);
+                    print_line(lineNo, columnNo-2, "missing '*' before '/'");
                     exit(1);
                 } else {
-                    pos += 2;
+                    getChar();
                     CurrentChar = getChar();
                 }
             }
+        } else {
+            print_line(lineNo, columnNo-3, "missing '*' or '/'");
+            exit(1);
         }
+
         // 跳过注释后的空白符.
-        while (isspace(CurrentChar)) CurrentChar = getChar();
+        while (isspace(CurrentChar)) {
+            if (CurrentChar == '\n' || CurrentChar == '\r') {
+                lineNo++;
+                columnNo = 1;
+            }
+            CurrentChar = getChar();
+        }
     }
 
     // int or float number
@@ -144,7 +196,7 @@ TOKEN Lexer::getNextToken() {
                 NumberString += CurrentChar;
                 CurrentChar = getChar();
             } while (isdigit(CurrentChar));
-            pos--;
+            put_backChar();
             return TOKEN{TK_FLOAT_LITERAL, NumberString};
         } else {
             do { // Start of Number: [0-9]+
@@ -157,10 +209,10 @@ TOKEN Lexer::getNextToken() {
                     NumberString += CurrentChar;
                     CurrentChar = getChar();
                 } while (isdigit(CurrentChar));
-                pos--;
+                put_backChar();
                 return TOKEN{TK_FLOAT_LITERAL, NumberString};
             } else { // Integer : [0-9]+
-                pos--;
+                put_backChar();
                 return TOKEN{TK_INT_LITERAL, NumberString};
             }
         }
@@ -172,7 +224,7 @@ TOKEN Lexer::getNextToken() {
             IdentifierString += CurrentChar;
             CurrentChar = getChar();
         } while (isalnum(CurrentChar) || CurrentChar == '_');
-        pos--;
+        put_backChar();
 
         // if keywords
         if (IdentifierString == "int")
@@ -261,7 +313,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_EQ, s};
                 return token;
-            } else pos--;
+            } else put_backChar();
             TOKEN token = TOKEN{TK_ASSIGN, s};
             return token;
         }
@@ -272,7 +324,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_NE, s};
                 return token;
-            } else pos--;
+            } else put_backChar();
             TOKEN token = TOKEN{TK_NOT, s};
             return token;
         }
@@ -283,7 +335,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_LE, s};
                 return token;
-            } else pos--;
+            } else put_backChar();
             TOKEN token = TOKEN{TK_LT, s};
             return token;
         }
@@ -294,7 +346,7 @@ TOKEN Lexer::getNextToken() {
                 s += CurrentChar;
                 TOKEN token = TOKEN{TK_GE, s};
                 return token;
-            } else pos--;
+            } else put_backChar();
             TOKEN token = TOKEN{TK_GT, s};
             return token;
         }
@@ -1573,6 +1625,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+
     // 词法分析
     Lexer lexer;
 //    // 打印所有的tokens
@@ -1590,6 +1643,7 @@ int main(int argc, char *argv[]) {
     semantic_analyzer.analyze(*tree);
 
     // 代码生成
+    //    print_it = true;
     CodeGenerator code_generator;
     code_generator.code_generate(*tree);
 }

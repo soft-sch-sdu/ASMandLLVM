@@ -1,12 +1,4 @@
-/********* f  *******fsadsdf***
-lll
-****/
-//  sdfasdf
-
-//////
-
-//khkjh
-int g = 7; //////////////////////////jhkh////////////////////
+int g = 7;
 int fun(int i, int j, int k) {return h1 + (i+j)*k;}
 int fun1(int kkk) {return 6;}
 int main(){return fun(5, 1, 1);}
@@ -15,4 +7,4 @@ float h1 = 4; float h2;
 /********* f  *******fsadsdf***
 lll
 ****/
-//  sdfasdf
+/
