@@ -32,8 +32,9 @@ assert 20 "int main(float j, int k, float h){int temp, b = 11;;; int c = --9+b;}
 
 assert 1 "int main(){true;}"
 assert 0 "int main(){bool i=true;;bool k,s, j=false;}"
+assert 2 "int main(float kk, int h){h =2; return h;}"
 assert 81 "int main(float kk, int h){int i=81;}  float another() {21;}"
-assert 2 "int main(float kk, int h){h =2; h;}  float another() {21;}"
+assert 2 "int main(){int h =2; return h;} "
 assert 11 "int main(){return 5+6;}"
 assert 5 "int fun(int i, int j) {return i;} int main(){return fun(5, 1);} "
 assert 7 "int fun(int i, int j) {return j;} int main(){return fun(5, 7);} "

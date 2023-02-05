@@ -4,7 +4,6 @@
 // 做为字符流.
 #include <fstream>
 #include <sstream>
-//#include <stringstream>
 
 #include <cstring>
 #include <vector>
@@ -16,34 +15,34 @@
 #include <map>
 
 
+bool print_it = false; //assembly code
+
 // 运算符、表达式、变量等的基础类型(即，base-type, 或builtin-type).
 typedef enum base_type {
     base_type_int,
     base_type_float,
     base_type_bool,
     base_type_void,
+    base_type_char,
 } base_type;
 
 base_type return_type_of_current_function;
 
-bool print_it = false; //assembly code
-
-
 // main()函数负责把源代码读入input_string，即字符流，做为Lexer的输入.
 static std::string input_string;
 
-static void print_line(int l, int c, std::string msg) {
-    std::stringstream ss(input_string);
+static void print_line(int line_no, int column_no, const std::string& msg) {
+    std::stringstream input_string_stream(input_string);
     std::string line_str;
 
-    for (long i = 0; i <= l; i++) std::getline(ss, line_str, '\n');
+    for (long i = 0; i <= line_no; i++) std::getline(input_string_stream, line_str, '\n');
 
-    fprintf(stderr, "error at %d:%d\n", l+1, c+1);
+    fprintf(stderr, "error at %d:%d\n", line_no + 1, column_no + 1);
     fprintf(stderr, "%s\n", line_str.c_str());
-    for (int i = 0; i < c; i++)
+    for (int i = 0; i < column_no; i++)
         fprintf(stderr, " ");
     fprintf(stderr, "^ %s\n", msg.c_str());
- }
+}
 
 
 //===----------------------------------------------------------------------===//
@@ -52,44 +51,44 @@ static void print_line(int l, int c, std::string msg) {
 
 // 用不同的整数值表示token的不同类型.
 enum TOKEN_TYPE {
-    TK_INT_LITERAL = -1,            // [0-9]+
-    TK_FLOAT_LITERAL = -2,          // [0-9]+.[0-9]+
-    TK_BOOL_LITERAL = -3,
-    TK_IDENTIFIER = -4,             // identifier
+    TK_INT_LITERAL,                  // [0-9]+
+    TK_FLOAT_LITERAL,                // [0-9]+.[0-9]+
+    TK_BOOL_LITERAL,                 // true or false
+    TK_CHAR_LITERAL,                 // 'a'
+    TK_IDENTIFIER,                   // identifier
     // keywords
-    TK_INT = -5,                    // int
-    TK_FLOAT = -6,                  // float
-    TK_BOOL = -7,                   // bool
-    TK_VOID = -17,                  // void
-    TK_TRUE = -8,                   // true
-    TK_FALSE = -9,                  // false
-    TK_RETURN = -16,                // return
+    TK_INT,                          // int
+    TK_FLOAT,                        // float
+    TK_BOOL,                         // bool
+    TK_VOID,                         // void
+    TK_CHAR,                         // char
+    TK_RETURN,                       // return
 
-    TK_PLUS = int('+'),             // addition or unary plus
-    TK_MINUS = int('-'),            // subtraction or unary negative
-    TK_MUL = int('*'),              // multiplication
-    TK_DIV = int('/'),              // division
-    TK_NOT = int('!'),              // not
-    TK_LPAREN = int('('),
-    TK_RPAREN = int(')'),
-    TK_LBRACE = int('{'),
-    TK_RBRACE = int('}'),
-    TK_ASSIGN = int('='),
-    TK_COMMA = int(','),
-    TK_SEMICOLON = int(';'),
+    TK_PLUS,                         // "+"
+    TK_MINUS,                        // "-"
+    TK_MUL,                          // "*"
+    TK_DIV,                          // "/"
+    TK_NOT,                          // "!"
+    TK_LPAREN,                       // "("
+    TK_RPAREN,                       // ")"
+    TK_LBRACE,                       // "{"
+    TK_RBRACE,                       // "}"
+    TK_ASSIGN,                       // "="
+    TK_COMMA,                        // ","
+    TK_SEMICOLON,                    // ";"
 
     // comparison operators
-    TK_AND = -10,      // "&&"
-    TK_OR = -11,       // "||"
-    TK_EQ = -12,       // equal  "=="
-    TK_NE = -13,       // not equal "!="
-    TK_LT = int('<'),  // less than
-    TK_LE = -14,       // less than or equal to "<="
-    TK_GT = int('>'),  // greater than
-    TK_GE = -15,       // greater than or equal to ">="
+    TK_AND,                     // "&&"
+    TK_OR,                      // "||"
+    TK_EQ,                      // equal  "=="
+    TK_NE,                      // not equal "!="
+    TK_LT,                      // less than "<"
+    TK_LE,                      // less than or equal to "<="
+    TK_GT,                      // greater than ">"
+    TK_GE,                      // greater than or equal to ">="
 
     // special tokens
-    TK_EOF = 0, // 字符流（亦即源代码）的结尾.
+    TK_EOF = -1,             // 字符流（亦即源代码）的结尾.
 };
 
 // TOKEN结构体.
@@ -107,7 +106,7 @@ private:
     // 字符流指针.
     long pos = 0;
 
-    int lineNo = 0;
+    int lineNo = 1;
     int columnNo = 0;
 
     // getChar()读取当前字符，并将指针沿字符流后移一个字符.
@@ -149,8 +148,7 @@ TOKEN Lexer::getNextToken() {
                 continue;
         } else if (CurrentChar == '*') { // 处理多行注释
             if ((CurrentChar = getChar()) == '/') {
-//                fprintf(stderr, "comments error: missing '*' before '/' at line %d, column %d\n", lineNo+1,columnNo-1);
-                print_line(lineNo, columnNo-2, "missing '*' before '/'");
+                print_line(lineNo, columnNo - 2, "missing '*' before '/'");
                 exit(1);
             }
             while (CurrentChar != '/') {
@@ -164,8 +162,7 @@ TOKEN Lexer::getNextToken() {
                 put_backChar();
                 put_backChar();
                 if ((CurrentChar = getChar()) != '*') {
-//                    fprintf(stderr, "comments error: missing '*' before '/' at line %d, column %d\n", lineNo+1,columnNo-1);
-                    print_line(lineNo, columnNo-2, "missing '*' before '/'");
+                    print_line(lineNo, columnNo - 2, "missing '*' before '/'");
                     exit(1);
                 } else {
                     getChar();
@@ -173,7 +170,7 @@ TOKEN Lexer::getNextToken() {
                 }
             }
         } else {
-            print_line(lineNo, columnNo-3, "missing '*' or '/'");
+            print_line(lineNo, columnNo - 3, "missing '*' or '/'");
             exit(1);
         }
 
@@ -197,7 +194,7 @@ TOKEN Lexer::getNextToken() {
                 CurrentChar = getChar();
             } while (isdigit(CurrentChar));
             put_backChar();
-            return TOKEN{TK_FLOAT_LITERAL, NumberString};
+            return TOKEN{TK_FLOAT_LITERAL, NumberString, lineNo, columnNo};
         } else {
             do { // Start of Number: [0-9]+
                 NumberString += CurrentChar;
@@ -210,10 +207,10 @@ TOKEN Lexer::getNextToken() {
                     CurrentChar = getChar();
                 } while (isdigit(CurrentChar));
                 put_backChar();
-                return TOKEN{TK_FLOAT_LITERAL, NumberString};
+                return TOKEN{TK_FLOAT_LITERAL, NumberString, lineNo, columnNo};
             } else { // Integer : [0-9]+
                 put_backChar();
-                return TOKEN{TK_INT_LITERAL, NumberString};
+                return TOKEN{TK_INT_LITERAL, NumberString, lineNo, columnNo};
             }
         }
     }
@@ -228,71 +225,64 @@ TOKEN Lexer::getNextToken() {
 
         // if keywords
         if (IdentifierString == "int")
-            return TOKEN{TK_INT, IdentifierString};
+            return TOKEN{TK_INT, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "float")
-            return TOKEN{TK_FLOAT, IdentifierString};
+            return TOKEN{TK_FLOAT, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "bool")
-            return TOKEN{TK_BOOL, IdentifierString};
+            return TOKEN{TK_BOOL, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "void")
-            return TOKEN{TK_VOID, IdentifierString};
+            return TOKEN{TK_VOID, IdentifierString, lineNo, columnNo};
+        if (IdentifierString == "char")
+            return TOKEN{TK_CHAR, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "true" || IdentifierString == "false")
-            return TOKEN{TK_BOOL_LITERAL, IdentifierString};
+            return TOKEN{TK_BOOL_LITERAL, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "return")
-            return TOKEN{TK_RETURN, IdentifierString};
+            return TOKEN{TK_RETURN, IdentifierString, lineNo, columnNo};
 
         // otherwise, identifiers
-        return TOKEN{TK_IDENTIFIER, IdentifierString};
+        return TOKEN{TK_IDENTIFIER, IdentifierString, lineNo, columnNo};
     }
 
 
     switch (CurrentChar) {
         case '+': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_PLUS, s};
-            return token;
+            return TOKEN{TK_PLUS, s, lineNo, columnNo};
         }
         case '-': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_MINUS, s};
-            return token;
+            return TOKEN{TK_MINUS, s, lineNo, columnNo};
         }
         case '*': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_MUL, s};
-            return token;
+            return TOKEN{TK_MUL, s, lineNo, columnNo};
         }
         case '/': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_DIV, s};
-            return token;
+            return TOKEN{TK_DIV, s, lineNo, columnNo};
         }
         case '(': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_LPAREN, s};
-            return token;
+            return TOKEN{TK_LPAREN, s, lineNo, columnNo};
         }
         case ')': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_RPAREN, s};
-            return token;
+            return TOKEN{TK_RPAREN, s, lineNo, columnNo};
         }
         case '{': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_LBRACE, s};
-            return token;
+            return TOKEN{TK_LBRACE, s, lineNo, columnNo};
         }
         case '}': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_RBRACE, s};
-            return token;
+            return TOKEN{TK_RBRACE, s, lineNo, columnNo};
         }
         case '&': {
             std::string s(1, CurrentChar);
             CurrentChar = getChar();
             if (CurrentChar == '&') {
                 s += CurrentChar;
-                TOKEN token = TOKEN{TK_AND, s};
-                return token;
+                return TOKEN{TK_AND, s, lineNo, columnNo};
             } else CurrentChar = s.front();
             break;
         }
@@ -301,8 +291,7 @@ TOKEN Lexer::getNextToken() {
             CurrentChar = getChar();
             if (CurrentChar == '|') {
                 s += CurrentChar;
-                TOKEN token = TOKEN{TK_OR, s};
-                return token;
+                return TOKEN{TK_OR, s, lineNo, columnNo};
             } else CurrentChar = s.front();
             break;
         }
@@ -311,54 +300,68 @@ TOKEN Lexer::getNextToken() {
             CurrentChar = getChar();
             if (CurrentChar == '=') {
                 s += CurrentChar;
-                TOKEN token = TOKEN{TK_EQ, s};
-                return token;
+                return TOKEN{TK_EQ, s, lineNo, columnNo};
             } else put_backChar();
-            TOKEN token = TOKEN{TK_ASSIGN, s};
-            return token;
+            return TOKEN{TK_ASSIGN, s, lineNo, columnNo};
         }
         case '!': {
             std::string s(1, CurrentChar);
             CurrentChar = getChar();
             if (CurrentChar == '=') {
                 s += CurrentChar;
-                TOKEN token = TOKEN{TK_NE, s};
-                return token;
+                return TOKEN{TK_NE, s, lineNo, columnNo};
             } else put_backChar();
-            TOKEN token = TOKEN{TK_NOT, s};
-            return token;
+            return TOKEN{TK_NOT, s, lineNo, columnNo};
         }
         case '<': {
             std::string s(1, CurrentChar);
             CurrentChar = getChar();
             if (CurrentChar == '=') {
                 s += CurrentChar;
-                TOKEN token = TOKEN{TK_LE, s};
-                return token;
+                return TOKEN{TK_LE, s, lineNo, columnNo};
             } else put_backChar();
-            TOKEN token = TOKEN{TK_LT, s};
-            return token;
+            return TOKEN{TK_LT, s, lineNo, columnNo};
         }
         case '>': {
             std::string s(1, CurrentChar);
             CurrentChar = getChar();
             if (CurrentChar == '=') {
                 s += CurrentChar;
-                TOKEN token = TOKEN{TK_GE, s};
-                return token;
+                return TOKEN{TK_GE, s, lineNo, columnNo};
             } else put_backChar();
-            TOKEN token = TOKEN{TK_GT, s};
-            return token;
+            return TOKEN{TK_GT, s, lineNo, columnNo};
         }
         case ',': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_COMMA, s};
-            return token;
+            return TOKEN{TK_COMMA, s, lineNo, columnNo};
         }
         case ';': {
             std::string s(1, CurrentChar);
-            TOKEN token = TOKEN{TK_SEMICOLON, s};
-            return token;
+            return TOKEN{TK_SEMICOLON, s, lineNo, columnNo};
+        }
+        case '\'': {// char character ref. https://github.com/rui314/chibicc/blob/aa0accc75e9358d313fef0a6d4005103e2ce25f5/tokenize.c
+            if ((CurrentChar = getChar()) == '\0')
+                print_line(lineNo, columnNo, "unclosed char literal");
+            char c;
+            if (CurrentChar == '\\'){
+                CurrentChar = getChar();
+                switch (CurrentChar) {
+                    case 'a': c = '\a'; break;
+                    case 'b': c = '\b'; break;
+                    case 't': c = '\t'; break;
+                    case 'n': c = '\n'; break;
+                    case 'v': c = '\v'; break;
+                    case 'f': c = '\f'; break;
+                    case 'r': c = '\r'; break;
+                    default:  c = CurrentChar;
+                }
+            }
+            else c = CurrentChar;
+
+            if ((CurrentChar = getChar()) != '\'')
+                print_line(lineNo, columnNo,  "unclosed char literal");
+            std::string s(1, c);
+            return TOKEN{TK_CHAR_LITERAL, s, lineNo, columnNo};
         }
         default:
             break;
@@ -532,6 +535,7 @@ public:
         if (tok.type == TK_INT_LITERAL) b_type = base_type_int;
         else if (tok.type == TK_FLOAT_LITERAL) b_type = base_type_float;
         else if (tok.type == TK_BOOL_LITERAL) b_type = base_type_bool;
+        else if (tok.type == TK_CHAR_LITERAL) b_type = base_type_char;
     }
 
     void accept(Visitor &v) override { v.visit(*this); }
@@ -575,7 +579,7 @@ public:
     void accept(Visitor &v) override { v.visit(*this); }
 };
 
-/// 单个变量声明(或同时进行初始化)对应的结点
+/// 单个变量声明对应的结点
 class SingleVariableDeclaration_AST_Node : public AST_Node {
 public:
     std::shared_ptr<AST_Node> type; // type node
@@ -758,7 +762,8 @@ std::shared_ptr<AST_Node> Parser::primary() {
     // num_literal
     if (CurrentToken.type == TK_INT_LITERAL ||
         CurrentToken.type == TK_FLOAT_LITERAL ||
-        CurrentToken.type == TK_BOOL_LITERAL) {
+        CurrentToken.type == TK_BOOL_LITERAL ||
+        CurrentToken.type == TK_CHAR_LITERAL) {
         auto node = std::make_shared<NumLiteral_AST_Node>(CurrentToken);
         eatCurrentToken();
         return node;
@@ -922,7 +927,7 @@ std::shared_ptr<AST_Node> Parser::declarator() {
     // 暂时不考虑type-suffix，等处理数组的时候再考虑
 }
 
-// type_specification := "int" | "float" | "bool" | "void"
+// type_specification := "int" | "float" | "bool" | "void" | "char"
 std::shared_ptr<AST_Node> Parser::type_specification() {
     if (CurrentToken.type == TK_INT) {
         eatCurrentToken();
@@ -939,6 +944,10 @@ std::shared_ptr<AST_Node> Parser::type_specification() {
     if (CurrentToken.type == TK_VOID) {
         eatCurrentToken();
         return std::make_shared<Type_AST_Node>("void");
+    }
+    if (CurrentToken.type == TK_CHAR) {
+        eatCurrentToken();
+        return std::make_shared<Type_AST_Node>("char");
     }
     fprintf(stderr, "%s is not a type\n", (CurrentToken.lexeme).c_str());
     return nullptr;
@@ -975,7 +984,8 @@ std::shared_ptr<AST_Node> Parser::statement() {
 
     if (CurrentToken.type == TK_INT ||
         CurrentToken.type == TK_FLOAT ||
-        CurrentToken.type == TK_BOOL)
+        CurrentToken.type == TK_BOOL||
+        CurrentToken.type == TK_CHAR)
         return variable_declaration();
 
     if (CurrentToken.type == TK_RETURN) {
@@ -1053,7 +1063,8 @@ std::shared_ptr<AST_Node> Parser::program() {
     std::vector<std::shared_ptr<FunctionDeclaration_AST_Node>> functionDeclarationList;
     while (CurrentToken.type != TK_EOF) {
         if (CurrentToken.type == TK_INT || CurrentToken.type == TK_FLOAT ||
-            CurrentToken.type == TK_BOOL || CurrentToken.type == TK_VOID) {
+            CurrentToken.type == TK_BOOL || CurrentToken.type == TK_VOID ||
+            CurrentToken.type == TK_CHAR) {
             eatCurrentToken();
             if (CurrentToken.type == TK_IDENTIFIER) {
                 eatCurrentToken();
@@ -1097,7 +1108,7 @@ std::shared_ptr<AST_Node> Parser::program() {
  *                  | "return" expression-statement
  *                  | block
  * variable_declaration  :=  type_specification declarator ("=" expression)? ("," declarator ("=" expression)?)* ";"
- * type_specification  :=  "int" | "float" | "bool" | "void"
+ * type_specification  :=  "int" | "float" | "bool" | "void" | "char"
  * declarator  :=  identifier type-suffix
  * expression_statement  :=  expression? ";"
  * expression  :=  equality ("=" expression)?
@@ -1169,7 +1180,7 @@ public:
             fprintf(stderr, "type returned does not match the type of function \"%s\".\n", node.functionName.c_str());
             return_type_of_current_function = node.b_type;
         }
-               // 类型转换也可以放在visit BinaryOperation的时候进行
+        // 类型转换也可以放在visit BinaryOperation的时候进行
         // 下面这种不一致有点严重，退出
         if (node.b_type == base_type_void && functionSymbol->type != base_type_void) {
             fprintf(stderr, "return type of %s should not be void!\n", node.functionName.c_str());
@@ -1204,6 +1215,7 @@ public:
         else if (node.type_name == "float") node.b_type = base_type_float;
         else if (node.type_name == "bool") node.b_type = base_type_bool;
         else if (node.type_name == "void") node.b_type = base_type_void;
+        else if (node.type_name == "char") node.b_type = base_type_char;
     }
 
     void visit(SingleVariableDeclaration_AST_Node &node) override {
@@ -1227,7 +1239,8 @@ public:
                 }
                 globals.push_back(global_variable{varNode->var_name, typeNode->b_type, l});
             } else {  // 局部变量
-                offsetSum += 8;
+                if (typeNode->b_type == base_type_char) offsetSum += 1;
+                else offsetSum += 8;
                 varSymbol = std::make_shared<Variable_Symbol>(varNode->var_name, "local_variable", typeNode->b_type,
                                                               -offsetSum);
             }
@@ -1378,6 +1391,9 @@ public:
             // like c, 1 stands for true, and 0 stands for false
             if (node.literal == "true") std::cout << "    mov $1, %rax\n";
             else std::cout << "    mov $0, %rax\n";
+        } else if (node.b_type == base_type_char) {
+            char c = node.literal.at(0);
+            std::cout << "    mov $" << (int)c << ", %rax   # char " << "\n";
         }
     }
 
@@ -1481,7 +1497,9 @@ public:
         // 然后，将其值放入寄存器
         if (node.b_type == base_type_float)          // 若是float，
             std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0
-        else if (node.b_type == base_type_int || node.b_type == base_type_bool) // 否则，
+        else if (node.b_type == base_type_int ||
+                 node.b_type == base_type_bool ||
+                 node.b_type == base_type_char)// 否则，
             std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax
     }
 
@@ -1555,8 +1573,10 @@ public:
             std::cout << "    lea printf_format, %rdi\n";  // printf_format位于.data段
             if (return_type_of_current_function == base_type_float) // 打印float数值，准备格式串
                 print_format_string = R"(  .string   "%f\n" )";
-            else
-            {  // 打印整数等数值，准备格式串
+            else if (return_type_of_current_function == base_type_char) { // 打印char，准备格式串
+                std::cout << "    mov %rax, %rsi\n";
+                print_format_string = R"(  .string   "%c\n" )";
+            } else {  // 打印整数等数值，准备格式串
                 std::cout << "    mov %rax, %rsi\n";
                 print_format_string = R"(  .string   "%d\n" )";
             }
@@ -1643,7 +1663,7 @@ int main(int argc, char *argv[]) {
     semantic_analyzer.analyze(*tree);
 
     // 代码生成
-    //    print_it = true;
+//        print_it = true;
     CodeGenerator code_generator;
     code_generator.code_generate(*tree);
 }
