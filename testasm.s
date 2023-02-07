@@ -6,7 +6,7 @@ main:
     sub $16, %rsp
     lea -1(%rbp), %rax
     push %rax
-    mov $97, %rax   # char
+    mov $116, %rax   # char 
     pop %rdi
     mov %rax, (%rdi)
     lea -1(%rbp), %rax
@@ -22,4 +22,4 @@ L.main.return:
 
     .data
 printf_format:
-  .string   "%c\n"
+  .string   "%c\n" 

@@ -1,7 +1,6 @@
 #include <iostream>
 
-// 包含fstream和sstream的目的，是为了将源代码读入到一个string(input_string，在main()中完成)，
-// 做为字符流.
+// 包含fstream和sstream的目的，是为了将源代码读入到input_string，即字符流.
 #include <fstream>
 #include <sstream>
 
@@ -28,7 +27,7 @@ typedef enum base_type {
 
 base_type return_type_of_current_function;
 
-// main()函数负责把源代码读入input_string，即字符流，做为Lexer的输入.
+// 字符流，做为Lexer的输入. main()函数负责把源代码读入input_string.
 static std::string input_string;
 
 static void print_line(int line_no, int column_no, const std::string& msg) {
@@ -66,8 +65,9 @@ enum TOKEN_TYPE {
 
     TK_PLUS,                         // "+"
     TK_MINUS,                        // "-"
-    TK_MUL,                          // "*"
+    TK_MULorDEREF,                   // "*"
     TK_DIV,                          // "/"
+    TK_ADDRESS,                      // "&"
     TK_NOT,                          // "!"
     TK_LPAREN,                       // "("
     TK_RPAREN,                       // ")"
@@ -255,7 +255,7 @@ TOKEN Lexer::getNextToken() {
         }
         case '*': {
             std::string s(1, CurrentChar);
-            return TOKEN{TK_MUL, s, lineNo, columnNo};
+            return TOKEN{TK_MULorDEREF, s, lineNo, columnNo};
         }
         case '/': {
             std::string s(1, CurrentChar);
@@ -283,8 +283,8 @@ TOKEN Lexer::getNextToken() {
             if (CurrentChar == '&') {
                 s += CurrentChar;
                 return TOKEN{TK_AND, s, lineNo, columnNo};
-            } else CurrentChar = s.front();
-            break;
+            } else put_backChar();
+            return TOKEN{TK_ADDRESS, s, lineNo, columnNo};
         }
         case '|': {
             std::string s(1, CurrentChar);
@@ -292,7 +292,7 @@ TOKEN Lexer::getNextToken() {
             if (CurrentChar == '|') {
                 s += CurrentChar;
                 return TOKEN{TK_OR, s, lineNo, columnNo};
-            } else CurrentChar = s.front();
+            } else put_backChar();
             break;
         }
         case '=': {
@@ -808,11 +808,13 @@ std::shared_ptr<AST_Node> Parser::primary() {
 
 }
 
-// unary :=	(“+” | “-” | “!”) unary | primary
+// unary :=	(“+” | “-” | “!” | “*” | “&”) unary | primary
 std::shared_ptr<AST_Node> Parser::unary() {
-    if (CurrentToken.type == TK_PLUS ||
-        CurrentToken.type == TK_MINUS ||
-        CurrentToken.type == TK_NOT) {
+    if (CurrentToken.type == TK_PLUS       ||
+        CurrentToken.type == TK_MINUS      ||
+        CurrentToken.type == TK_NOT        ||
+        CurrentToken.type == TK_MULorDEREF ||
+        CurrentToken.type == TK_ADDRESS) {
         TOKEN tok = CurrentToken;
         eatCurrentToken();
         return std::make_shared<UnaryOperator_AST_Node>(tok.lexeme, std::move(unary()));
@@ -824,7 +826,7 @@ std::shared_ptr<AST_Node> Parser::unary() {
 std::shared_ptr<AST_Node> Parser::mul_div() {
     std::shared_ptr<AST_Node> node = unary();
     while (true) {
-        if (CurrentToken.type == TK_MUL || CurrentToken.type == TK_DIV) {
+        if (CurrentToken.type == TK_MULorDEREF || CurrentToken.type == TK_DIV) {
             TOKEN op_token = CurrentToken;
             eatCurrentToken();
             auto left = std::move(node);
@@ -1392,7 +1394,7 @@ public:
             if (node.literal == "true") std::cout << "    mov $1, %rax\n";
             else std::cout << "    mov $0, %rax\n";
         } else if (node.b_type == base_type_char) {
-            char c = node.literal.at(0);
+            char c = node.literal.front();
             std::cout << "    mov $" << (int)c << ", %rax   # char " << "\n";
         }
     }
@@ -1460,8 +1462,9 @@ public:
     }
 
     void visit(UnaryOperator_AST_Node &node) override {
-        node.right->accept(*this);
-        if (node.operation == "-") {
+        if (node.operation == "+") return; // do nothing
+        if (node.operation == "-") { // 取负
+            node.right->accept(*this); // 获得右值，存于%rax
             if (node.b_type == base_type_int)
                 std::cout << "    neg %rax" << std::endl;
             else {
@@ -1472,6 +1475,33 @@ public:
                 std::cout << "    cvtsi2sd %rax, %xmm1" << std::endl;
                 std::cout << "    mulsd %xmm1, %xmm0" << std::endl;
             }
+            return;
+        }
+        if (node.operation == "!") { // 取否
+            node.right->accept(*this); // 该步获得右值，存于%rax
+            if (node.b_type == base_type_bool) std::cout << "    not %rax" << std::endl;
+            return;
+        }
+        if (node.operation == "&") { // 取地址
+            std::shared_ptr<Variable_AST_Node> varNode = std::dynamic_pointer_cast<Variable_AST_Node>(node.right);
+            // 获取其在内存中的地址：
+            int var_offset = varNode->symbol->offset;
+            if (var_offset == 0)  // offset=0，则是全局变量，位于.data段
+                std::cout << "    lea " << varNode->var_name << "(%rip), %rax\n";
+            else                  // 否则，是局部变量或参数，位于栈
+                std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
+            return;
+        }
+        if (node.operation == "*") { //
+            node.right->accept(*this); // 该步获得左值(即地址)，存于%rax
+            // 然后，将其值由内存放入寄存器
+            if (node.b_type == base_type_float)          // 若是float，
+                std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0
+            else if (node.b_type == base_type_int ||
+                     node.b_type == base_type_bool ||
+                     node.b_type == base_type_char)// 否则，
+                std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax
+            return;
         }
     }
 
@@ -1488,13 +1518,13 @@ public:
 
     void visit(Variable_AST_Node &node) override {
         // 若变量是右值
-        // 获取其在内存中的地址：
+        // 获取其在内存中的地址，存于%rax：
         int var_offset = node.symbol->offset;
         if (var_offset == 0)  // offset=0，则是全局变量，位于.data段
             std::cout << "    lea " << node.var_name << "(%rip), %rax\n";
         else                  // 否则，是局部变量或参数，位于栈
             std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
-        // 然后，将其值放入寄存器
+        // 然后，将其值由内存放入寄存器
         if (node.b_type == base_type_float)          // 若是float，
             std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0
         else if (node.b_type == base_type_int ||
@@ -1523,7 +1553,7 @@ public:
                 others_num += 1;
             }
         }
-        // 实参分发转入寄存器
+        // 实参分发，转入寄存器
         for (int j = node.arguments.size() - 1; j >= 0; j--) {
             if (node.arguments[j]->b_type == base_type_float) {
                 float_num = float_num - 1;

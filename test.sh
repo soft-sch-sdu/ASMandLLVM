@@ -40,11 +40,10 @@ assert 5 "int fun(int i, int j) {return i;} int main(){return fun(5, 1);} "
 assert 7 "int fun(int i, int j) {return j;} int main(){return fun(5, 7);} "
 assert 33 "int foo(int a, int b){
                            return a+b;
-                        }
-                        int main() {
+           }
+           int main() {
                 return foo(11,22);
-             }
-"
+           }"
 
 assert 21  "int foo(int a, int b, int c, int d, int e, int f){
                   return a+b+c+d+e+f;
@@ -57,4 +56,5 @@ assert 21  "int foo(int a, int b, int c, int d, int e, int f){
 assert 26  " int g = 17;
              int main(){ return 9 + g; }"
 
+assert 9  " int main(){ int i = 9; return *&i; }"
 echo OK
