@@ -4,17 +4,17 @@ main:
     push %rbp
     mov %rsp, %rbp
     sub $16, %rsp
-    lea -1(%rbp), %rax
+    lea -8(%rbp), %rax
     push %rax
-    mov $116, %rax   # char 
+    mov $4623789442425946112, %rax   # float 13.5
+    movq %rax, %xmm0
     pop %rdi
-    mov %rax, (%rdi)
-    lea -1(%rbp), %rax
-    mov (%rax), %rax
+    movsd %xmm0, (%rdi)
+    lea -8(%rbp), %rax
+    movsd (%rax), %xmm0
     jmp L.main.return
 L.main.return:
     lea printf_format, %rdi
-    mov %rax, %rsi
     call printf
     mov %rbp, %rsp
     pop %rbp
@@ -22,4 +22,4 @@ L.main.return:
 
     .data
 printf_format:
-  .string   "%c\n" 
+  .string   "%f\n"

@@ -1,1 +1,1 @@
-int main(){char c = 't';  return *&c;}
+float main(){ float a = 13.5; return a; }

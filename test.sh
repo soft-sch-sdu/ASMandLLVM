@@ -17,8 +17,8 @@ assert() {
 }
 
 # test cases with int only (without floats)
-assert 10 "int main(){10;}"
-assert 7 "int main() {7;}"
+assert 10 "int main(){return 10;}"
+assert 7 "int main() {return 7;}"
 assert 7 "int main() {{} { {7;} }}"
 assert 47 "int main(){42 + 10 -5;}"
 assert 57 "int main(){42 + 10 --5;}"
@@ -57,4 +57,7 @@ assert 26  " int g = 17;
              int main(){ return 9 + g; }"
 
 assert 9  " int main(){ int i = 9; return *&i; }"
+assert 11 " int main(){ int a[5] = { 11, 12, 13, 14,15}; return a[0]; }"
+assert 29 " int main(){ int a[5] = { 11, 12, 13, 14,15};
+                        int temp = 3; a[4] = a[4] + temp;return a[0]+a[4]; }"
 echo OK
