@@ -66,6 +66,8 @@ typedef enum TOKEN_TYPE {
     TK_RETURN,                       // return
     TK_IF,                           // if
     TK_ELSE,                         // else
+    TK_WHILE,                        // while
+    TK_FOR,                          // for
 
     TK_PLUS,                         // "+"
     TK_MINUS,                        // "-"
@@ -252,6 +254,10 @@ TOKEN Lexer::getNextToken() {
             return TOKEN{TK_IF, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "else")
             return TOKEN{TK_ELSE, IdentifierString, lineNo, columnNo};
+        if (IdentifierString == "while")
+            return TOKEN{TK_WHILE, IdentifierString, lineNo, columnNo};
+        if (IdentifierString == "for")
+            return TOKEN{TK_FOR, IdentifierString, lineNo, columnNo};
 
         // 2.普通标识符
         return TOKEN{TK_IDENTIFIER, IdentifierString, lineNo, columnNo};
@@ -513,6 +519,10 @@ class Block_AST_Node;
 
 class If_AST_Node;
 
+class While_AST_Node;
+
+class For_AST_Node;
+
 class SingleVariableDeclaration_AST_Node;
 
 class VariableDeclarations_AST_Node;
@@ -545,6 +555,10 @@ public:
     virtual void visit(Block_AST_Node &node) = 0;
 
     virtual void visit(If_AST_Node &node) = 0;
+
+    virtual void visit(While_AST_Node &node) = 0;
+
+    virtual void visit(For_AST_Node &node) = 0;
 
     virtual void visit(SingleVariableDeclaration_AST_Node &node) = 0;
 
@@ -622,6 +636,30 @@ public:
 
     If_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> then_stmt, std::shared_ptr<AST_Node> else_stmt)
             : condition(std::move(con)), then_statement(std::move(then_stmt)), else_statement(std::move(else_stmt)) {}
+
+    void accept(Visitor &v) override { v.visit(*this); }
+};
+
+/// while语句对应的结点
+class While_AST_Node : public AST_Node {
+public:
+    std::shared_ptr<AST_Node> condition;
+    std::shared_ptr<AST_Node> statement;
+
+    While_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> stmt)
+            : condition(std::move(con)), statement(std::move(stmt)) {}
+
+    void accept(Visitor &v) override { v.visit(*this); }
+};
+
+/// for语句对应的结点
+class For_AST_Node : public AST_Node {
+public:
+    std::shared_ptr<AST_Node> condition;
+    std::shared_ptr<AST_Node> statement;
+
+    For_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> stmt)
+            : condition(std::move(con)), statement(std::move(stmt)) {}
 
     void accept(Visitor &v) override { v.visit(*this); }
 };
@@ -1086,6 +1124,7 @@ std::shared_ptr<AST_Node> Parser::variable_declaration() {
 //                   | variable_declaration
 //                   | "return" expression-statement
 //                   | "if" "(" expression ")" statement ("else" statement)?
+//                   | "while" "(" expression ")" statement
 
 std::shared_ptr<AST_Node> Parser::statement() {
     // block
@@ -1121,6 +1160,35 @@ std::shared_ptr<AST_Node> Parser::statement() {
         }
         return std::make_shared<If_AST_Node>(condition, then_stmt, else_stmt);
     }
+
+    // "while" "(" expression ")" statement
+    if (CurrentToken.type == TK_WHILE) {
+        eatCurrentToken(); // eat "while"
+        std::shared_ptr<AST_Node> condition, stmt;
+        if (CurrentToken.type == TK_LPAREN) {
+            eatCurrentToken(); // eat "("
+            condition = expression();
+            if (CurrentToken.type == TK_RPAREN)
+                eatCurrentToken(); // eat ")"
+        }
+        stmt = statement();
+        return std::make_shared<While_AST_Node>(condition, stmt);
+    }
+
+    // "for" "(" expression? ";" expression ";" expression? ")" statement
+//    if (CurrentToken.type == TK_FOR) {
+//        eatCurrentToken(); // eat "for"
+//        std::shared_ptr<AST_Node> ..., stmt;
+//        if (CurrentToken.type == TK_LPAREN) {
+//            eatCurrentToken(); // eat "("
+//            ...
+//            if (CurrentToken.type == TK_RPAREN)
+//                eatCurrentToken(); // eat ")"
+//        }
+//        stmt = statement();
+//        return std::make_shared<For_AST_Node>(..., stmt);
+//    }
+
     // expression_statement
     return expression_statement();
 }
@@ -1237,6 +1305,7 @@ std::shared_ptr<AST_Node> Parser::program() {
  *                  | "return" expression-statement
  *                  | block
  *                  | "if" "(" expression ")" statement ("else" statement)?
+ *                  | "while" "(" expression ")" statement
  * variable_declaration	 :=  type_specification declarator ("=" expression)? ("," declarator ("=" expression)?)* ";"
  *                         | type_specification declarator ("=" "{" (expression)? ("," expression)* "}")? ("," declarator ("=" expression)?)* ";"
  * type_specification  :=  "int" | "float" | "bool" | "void" | "char"
@@ -1423,6 +1492,15 @@ public:
         if (node.else_statement != nullptr)
             node.else_statement->accept(*this);
     }
+
+    void visit(While_AST_Node &node) override {
+        if (node.condition != nullptr)
+            node.condition->accept(*this);
+        if (node.statement != nullptr)
+            node.statement->accept(*this);
+    }
+
+    void visit(For_AST_Node &node) override {}
 
     void visit(FunctionCall_AST_Node &node) override {
         std::shared_ptr<Symbol> functionSymbol = currentScope->lookup(node.funcName, false);
@@ -1824,6 +1902,22 @@ public:
             node.else_statement->accept(*this);
         std::cout << ".L.end." << auto_label << ":\n";
     }
+
+    void visit(While_AST_Node &node) override {
+        auto_label_no += 1;
+        std::string auto_label = std::to_string(auto_label_no);
+
+        std::cout << ".L.condition." << auto_label << ":\n";
+        node.condition->accept(*this);
+        compare_zero(node.condition);
+        std::cout << "    je  .L.end." << auto_label << std::endl;
+
+        node.statement->accept(*this);
+        std::cout << "    jmp  .L.condition." << auto_label << std::endl;
+        std::cout << ".L.end." << auto_label << ":\n";
+    }
+
+    void visit(For_AST_Node &node) override {}
 
     void visit(FunctionCall_AST_Node &node) override {
         int float_count = 0, others_count = 0;
