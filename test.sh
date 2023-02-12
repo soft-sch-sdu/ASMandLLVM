@@ -60,4 +60,10 @@ assert 9  " int main(){ int i = 9; return *&i; }"
 assert 11 " int main(){ int a[5] = { 11, 12, 13, 14,15}; return a[0]; }"
 assert 29 " int main(){ int a[5] = { 11, 12, 13, 14,15};
                         int temp = 3; a[4] = a[4] + temp;return a[0]+a[4]; }"
+assert 2 " int main(){ int i = 3, j = 4; if (i>j) return 1; else return 2; }"
+assert 5 " int main(){ if (3.1 <4.2) return 5; else return 2; }"
+assert 5 " int main(){ float i = 3.1, j = 4.2; if (i <j) return 5; else return 2; }"
+assert 2 " int main(){ float i = 3.1, j = 4.2; if (0) return 5; else return 2; }"
+assert 2 " int main(){ float i = 3.1, j = 4.2; if (0.0) return 5; else return 2; }"
+assert 2 " int main(){ float i = 3.1, j = 4.2; if (i - 3.1) return 5; else return 2; }"
 echo OK

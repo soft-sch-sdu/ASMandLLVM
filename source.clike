@@ -1,3 +1,1 @@
-float value(float w, float v, int i) {return w+v+i;}
-
-float main(){ float a[3] = {11.7, 11.8, 13.5}; return value(a[0], a[1], 2); }
+ int main(){ float i = 3.1, j = 4.2; if (1.1 - 1.1) return 5; else return 2; }

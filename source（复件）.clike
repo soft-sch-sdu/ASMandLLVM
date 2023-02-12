@@ -3,6 +3,8 @@ float main(){ float a=13.5; return a; }
 
 float value(float w, float v, int i) {return w+v-i;} float main(){ float a[3] = {11.7, 11.8, 13.5}; return value(a[0], a[1],1); }
 
-
-
+float value(float w, float v, int i) {
+    if (w>v) return w;
+    else return v;}
+float main(){ float a[3] = {11.7, 11.8, 13.5}; return value(a[0], a[1], 2); }
 
