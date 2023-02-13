@@ -30,6 +30,8 @@ Type type_returned_of_current_function;
 
 // 字符流，是Lexer的输入. main()函数负责把源代码读入input_string.
 static std::string input_string;
+static std::string current_break_label;
+static std::string current_continue_label;
 
 // 编译过程中，将错误信息打印出来
 static void print_line(int line_no, int column_no, const std::string &msg) {
@@ -68,6 +70,8 @@ typedef enum TOKEN_TYPE {
     TK_ELSE,                         // else
     TK_WHILE,                        // while
     TK_FOR,                          // for
+    TK_BREAK,                        // break
+    TK_CONTINUE,                     // continue
 
     TK_PLUS,                         // "+"
     TK_MINUS,                        // "-"
@@ -258,6 +262,10 @@ TOKEN Lexer::getNextToken() {
             return TOKEN{TK_WHILE, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "for")
             return TOKEN{TK_FOR, IdentifierString, lineNo, columnNo};
+        if (IdentifierString == "break")
+            return TOKEN{TK_BREAK, IdentifierString, lineNo, columnNo};
+        if (IdentifierString == "continue")
+            return TOKEN{TK_CONTINUE, IdentifierString, lineNo, columnNo};
 
         // 2.普通标识符
         return TOKEN{TK_IDENTIFIER, IdentifierString, lineNo, columnNo};
@@ -523,6 +531,10 @@ class While_AST_Node;
 
 class For_AST_Node;
 
+class Break_AST_Node;
+
+class Continue_AST_Node;
+
 class SingleVariableDeclaration_AST_Node;
 
 class VariableDeclarations_AST_Node;
@@ -559,6 +571,10 @@ public:
     virtual void visit(While_AST_Node &node) = 0;
 
     virtual void visit(For_AST_Node &node) = 0;
+
+    virtual void visit(Break_AST_Node &node) = 0;
+
+    virtual void visit(Continue_AST_Node &node) = 0;
 
     virtual void visit(SingleVariableDeclaration_AST_Node &node) = 0;
 
@@ -643,6 +659,7 @@ public:
 /// while语句对应的结点
 class While_AST_Node : public AST_Node {
 public:
+
     std::shared_ptr<AST_Node> condition;
     std::shared_ptr<AST_Node> statement;
 
@@ -660,6 +677,22 @@ public:
 
     For_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> stmt)
             : condition(std::move(con)), statement(std::move(stmt)) {}
+
+    void accept(Visitor &v) override { v.visit(*this); }
+};
+
+/// break语句对应的结点
+class Break_AST_Node : public AST_Node {
+public:
+    std::string break_label;
+
+    void accept(Visitor &v) override { v.visit(*this); }
+};
+
+/// break语句对应的结点
+class Continue_AST_Node : public AST_Node {
+public:
+    std::string continue_label;
 
     void accept(Visitor &v) override { v.visit(*this); }
 };
@@ -1125,7 +1158,8 @@ std::shared_ptr<AST_Node> Parser::variable_declaration() {
 //                   | "return" expression-statement
 //                   | "if" "(" expression ")" statement ("else" statement)?
 //                   | "while" "(" expression ")" statement
-
+//                   | "break" ";"
+//                   | "continue" ";"
 std::shared_ptr<AST_Node> Parser::statement() {
     // block
     if (CurrentToken.type == TK_LBRACE) return block();
@@ -1188,6 +1222,22 @@ std::shared_ptr<AST_Node> Parser::statement() {
 //        stmt = statement();
 //        return std::make_shared<For_AST_Node>(..., stmt);
 //    }
+
+    // "break" ";"
+    if (CurrentToken.type == TK_BREAK) {
+        eatCurrentToken(); // eat "break"
+        auto breakNode = std::make_shared<Break_AST_Node>();
+        eatCurrentToken(); // eat ";"
+        return breakNode;
+    }
+
+    // "continue" ";"
+    if (CurrentToken.type == TK_CONTINUE) {
+        eatCurrentToken(); // eat "continue"
+        auto continueNode = std::make_shared<Continue_AST_Node>();
+        eatCurrentToken(); // eat ";"
+        return continueNode;
+    }
 
     // expression_statement
     return expression_statement();
@@ -1306,6 +1356,7 @@ std::shared_ptr<AST_Node> Parser::program() {
  *                  | block
  *                  | "if" "(" expression ")" statement ("else" statement)?
  *                  | "while" "(" expression ")" statement
+ *                  | "break" ";"
  * variable_declaration	 :=  type_specification declarator ("=" expression)? ("," declarator ("=" expression)?)* ";"
  *                         | type_specification declarator ("=" "{" (expression)? ("," expression)* "}")? ("," declarator ("=" expression)?)* ";"
  * type_specification  :=  "int" | "float" | "bool" | "void" | "char"
@@ -1501,6 +1552,10 @@ public:
     }
 
     void visit(For_AST_Node &node) override {}
+
+    void visit(Break_AST_Node &node) override {}
+
+    void visit(Continue_AST_Node &node) override {}
 
     void visit(FunctionCall_AST_Node &node) override {
         std::shared_ptr<Symbol> functionSymbol = currentScope->lookup(node.funcName, false);
@@ -1704,6 +1759,8 @@ public:
                 case TK_DIV:
                     std::cout << "    divsd %xmm1, %xmm0" << std::endl;
                     return;
+                case TK_EQ: // "=="
+                case TK_NE: // "!="
                 case TK_LT: // "<"
                 case TK_LE: // "<="
                 case TK_GT: // ">"
@@ -1711,6 +1768,16 @@ public:
                 {
                     std::cout << "    ucomisd %xmm0, %xmm1" << std::endl;
                     switch (node.op) {
+                        case TK_EQ:
+                            std::cout << "    sete %al" << std::endl;
+                            std::cout << "    setnp %dl" << std::endl;
+                            std::cout << "    and %dl, %al" << std::endl;
+                            break;
+                        case TK_NE:
+                            std::cout << "    setne %al" << std::endl;
+                            std::cout << "    setp %dl" << std::endl;
+                            std::cout << "    or %dl, %al" << std::endl;
+                            break;
                         case TK_LT:
                             std::cout << "    setb %al" << std::endl;
                             break;
@@ -1760,6 +1827,8 @@ public:
                 std::cout << "    div %rdi, %rax" << std::endl;
                 return;
             }
+            case TK_EQ: // "=="
+            case TK_NE: // "!="
             case TK_LT: // "<"
             case TK_LE: // "<="
             case TK_GT: // ">"
@@ -1767,6 +1836,12 @@ public:
             {
                 std::cout << "    cmp %rdi, %rax" << std::endl;
                 switch (node.op) {
+                    case TK_EQ:
+                        std::cout << "    sete %al" << std::endl;
+                        break;
+                    case TK_NE:
+                        std::cout << "    setne %al" << std::endl;
+                        break;
                     case TK_LT:
                         std::cout << "    setl %al" << std::endl;
                         break;
@@ -1906,6 +1981,10 @@ public:
     void visit(While_AST_Node &node) override {
         auto_label_no += 1;
         std::string auto_label = std::to_string(auto_label_no);
+        std::string previous_break_label = current_break_label;
+        std::string previous_continue_label = current_continue_label;
+        current_break_label = ".L.end." + auto_label;
+        current_continue_label = ".L.condition." + auto_label;
 
         std::cout << ".L.condition." << auto_label << ":\n";
         node.condition->accept(*this);
@@ -1915,9 +1994,20 @@ public:
         node.statement->accept(*this);
         std::cout << "    jmp  .L.condition." << auto_label << std::endl;
         std::cout << ".L.end." << auto_label << ":\n";
+
+        current_break_label = previous_break_label;
+        current_continue_label = previous_continue_label;
     }
 
     void visit(For_AST_Node &node) override {}
+
+    void visit(Break_AST_Node &node) override {
+        std::cout << "    jmp " << current_break_label << std::endl;
+    }
+
+    void visit(Continue_AST_Node &node) override {
+        std::cout << "    jmp " << current_continue_label << std::endl;
+    }
 
     void visit(FunctionCall_AST_Node &node) override {
         int float_count = 0, others_count = 0;

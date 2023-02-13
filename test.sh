@@ -66,6 +66,8 @@ assert 5 " int main(){ float i = 3.1, j = 4.2; if (i <j) return 5; else return 2
 assert 2 " int main(){ float i = 3.1, j = 4.2; if (0) return 5; else return 2; }"
 assert 2 " int main(){ float i = 3.1, j = 4.2; if (0.0) return 5; else return 2; }"
 assert 2 " int main(){ float i = 3.1, j = 4.2; if (i - 3.1) return 5; else return 2; }"
-assert 6 " int main(){ int i =1, sum = 0; while (i<4) {sum =i+sum; i =i+1;} return sum; }"
+assert 12 " int main(){ int i =1, sum = 0; while (i<=4) {i =i+1; if (i==2)
+                                                         continue; sum =i+sum;
+} return sum; }"
 
 echo OK

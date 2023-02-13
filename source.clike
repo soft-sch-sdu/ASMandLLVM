@@ -1,1 +1,3 @@
- int main(){ int i =1; while (i<3) i=i+1; return i; }
+int main(){ int i =1, sum = 0; while (i<14) {sum =i+sum; i =i+1;
+if (i!=4)
+break;} return sum; }
