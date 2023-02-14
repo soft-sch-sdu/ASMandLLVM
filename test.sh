@@ -70,6 +70,6 @@ assert 12 " int main(){ int i =1, sum = 0; while (i<=4) {i =i+1; if (i==2)
                                                          continue; sum =i+sum;
 } return sum; }"
 
-assert 12 " int main(){ int i =1, sum = 0;  for (i=0;i<4; i=i+1) sum = sum +2*i; return sum; }"
-
+assert 6 "int i =1; int main(){ i=i+5; return i; }"
+assert 12 "int i =1; int main(){ int sum = 0;  for (i=0;i<4; i=i+1) sum = sum +2*i; return sum; }"
 echo OK

@@ -14,7 +14,6 @@
 #include <cstring>
 #include <vector>
 
-bool print_it = false; //assembly code
 
 // 运算符、表达式、变量等的类型(其中，除Type_array外，皆是基础类型，即base-type, 或builtin-type).
 typedef enum Type {
@@ -32,6 +31,7 @@ Type type_returned_of_current_function;
 static std::string input_string;
 static std::string current_break_label;
 static std::string current_continue_label;
+static std::map<std::string, std::string> print_format_strings; //for assembly code
 
 // 编译过程中，将错误信息打印出来
 static void print_line(int line_no, int column_no, const std::string &msg) {
@@ -59,6 +59,7 @@ typedef enum TOKEN_TYPE {
     TK_BOOL_LITERAL,                 // true or false
     TK_CHAR_LITERAL,                 // 'a'
     TK_IDENTIFIER,                   // identifier
+
     // keywords
     TK_INT,                          // int
     TK_FLOAT,                        // float
@@ -72,6 +73,7 @@ typedef enum TOKEN_TYPE {
     TK_FOR,                          // for
     TK_BREAK,                        // break
     TK_CONTINUE,                     // continue
+    TK_PRINT,                        // print
 
     TK_PLUS,                         // "+"
     TK_MINUS,                        // "-"
@@ -266,6 +268,8 @@ TOKEN Lexer::getNextToken() {
             return TOKEN{TK_BREAK, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "continue")
             return TOKEN{TK_CONTINUE, IdentifierString, lineNo, columnNo};
+        if (IdentifierString == "print")
+            return TOKEN{TK_PRINT, IdentifierString, lineNo, columnNo};
 
         // 2.普通标识符
         return TOKEN{TK_IDENTIFIER, IdentifierString, lineNo, columnNo};
@@ -535,6 +539,8 @@ class Break_AST_Node;
 
 class Continue_AST_Node;
 
+class Print_AST_Node;
+
 class SingleVariableDeclaration_AST_Node;
 
 class VariableDeclarations_AST_Node;
@@ -575,6 +581,8 @@ public:
     virtual void visit(Break_AST_Node &node) = 0;
 
     virtual void visit(Continue_AST_Node &node) = 0;
+
+    virtual void visit(Print_AST_Node &node) = 0;
 
     virtual void visit(SingleVariableDeclaration_AST_Node &node) = 0;
 
@@ -677,8 +685,10 @@ public:
     std::shared_ptr<AST_Node> increment;       // for (;;expression)
     std::shared_ptr<AST_Node> statement;       // for () statement
 
-    For_AST_Node(std::shared_ptr<AST_Node> init, std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> inc, std::shared_ptr<AST_Node> stmt)
-            : initialization(std::move(init)), condition(std::move(con)),  increment(std::move(inc)), statement(std::move(stmt)) {}
+    For_AST_Node(std::shared_ptr<AST_Node> init, std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> inc,
+                 std::shared_ptr<AST_Node> stmt)
+            : initialization(std::move(init)), condition(std::move(con)), increment(std::move(inc)),
+              statement(std::move(stmt)) {}
 
     void accept(Visitor &v) override { v.visit(*this); }
 };
@@ -691,10 +701,19 @@ public:
     void accept(Visitor &v) override { v.visit(*this); }
 };
 
-/// break语句对应的结点
+/// continue语句对应的结点
 class Continue_AST_Node : public AST_Node {
 public:
     std::string continue_label;
+
+    void accept(Visitor &v) override { v.visit(*this); }
+};
+
+/// print语句对应的结点
+class Print_AST_Node : public AST_Node {
+public:
+    std::shared_ptr<AST_Node> value;
+    explicit Print_AST_Node(std::shared_ptr<AST_Node> v) : value(std::move(v)) {}
 
     void accept(Visitor &v) override { v.visit(*this); }
 };
@@ -1160,9 +1179,10 @@ std::shared_ptr<AST_Node> Parser::variable_declaration() {
 //                   | "return" expression-statement
 //                   | "if" "(" expression ")" statement ("else" statement)?
 //                   | "while" "(" expression ")" statement
+//                   | for" "(" expression? ";" expression ";" expression? ")" statement
 //                   | "break" ";"
 //                   | "continue" ";"
-//                   | for" "(" expression? ";" expression ";" expression? ")" statement
+//                   | "print" "(" expression ")" ";"
 std::shared_ptr<AST_Node> Parser::statement() {
     // block
     if (CurrentToken.type == TK_LBRACE) return block();
@@ -1245,6 +1265,16 @@ std::shared_ptr<AST_Node> Parser::statement() {
         auto continueNode = std::make_shared<Continue_AST_Node>();
         eatCurrentToken(); // eat ";"
         return continueNode;
+    }
+
+    //                   | "print" "(" expression ")" ";"
+    if (CurrentToken.type == TK_PRINT) {
+        eatCurrentToken(); // eat "print"
+        eatCurrentToken(); // eat "("
+        auto valueNode = expression();
+        eatCurrentToken(); // eat ")"
+        eatCurrentToken(); // eat ";"
+        return std::make_shared<Print_AST_Node>(valueNode);
     }
 
     // expression_statement
@@ -1576,6 +1606,10 @@ public:
 
     void visit(Continue_AST_Node &node) override {}
 
+    void visit(Print_AST_Node &node) override {
+        if (node.value != nullptr) node.value->accept(*this);
+    }
+
     void visit(FunctionCall_AST_Node &node) override {
         std::shared_ptr<Symbol> functionSymbol = currentScope->lookup(node.funcName, false);
         if (functionSymbol == nullptr) {
@@ -1683,7 +1717,6 @@ private:
 
     int auto_label_no = 0;
 
-    std::string print_format_string;
 public:
     void code_generate(AST_Node &tree);
 
@@ -1715,15 +1748,18 @@ public:
 
     void generate_variable_address(Variable_AST_Node &varNode) {
         int var_offset = varNode.symbol->offset;
-        // 针对数组元素，数组各个元素从左往右，内存地址从小到大(从下到上).
-        if (varNode.type == Type_array) {
+        /* 1. 全局变量 */
+        if (var_offset == 0)  // offset=0，则是全局变量，位于.data段
+            std::cout << "    lea " << varNode.var_name << "(%rip), %rax\n";
+            /* 2. 局部变量 */
+        else if (varNode.type == Type_array) { // 若是数组元素，数组各个元素从左往右，内存地址从小到大(从下到上).
             varNode.indexExpression->accept(*this);
             std::cout << "    imul $8, %rax" << std::endl;
             std::cout << "    push %rax" << std::endl;
             std::cout << "    lea " << var_offset << "(%rbp), %rax" << std::endl;
             std::cout << "    pop %rdi" << std::endl;
             std::cout << "    add %rdi, %rax" << std::endl;
-        } else
+        } else // 若不是数组
             std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
     }
 
@@ -2045,6 +2081,29 @@ public:
         std::cout << "    jmp " << current_continue_label << std::endl;
     }
 
+    void visit(Print_AST_Node &node) override {
+        node.value->accept(*this);
+        switch (node.value->baseType) {
+            case Type_float:
+                print_format_strings.emplace("printf_format_float", R"(    .string   "%f\n")");
+                std::cout << "    lea printf_format_float, %rdi\n";
+                break;
+            case Type_int:
+                print_format_strings.emplace("printf_format_int", R"(    .string   "%d\n")");
+                std::cout << "    lea printf_format_int, %rdi\n";
+                std::cout << "    mov %rax, %rsi\n";
+                break;
+            case Type_char:
+                print_format_strings.emplace("printf_format_char", R"(    .string   "%c\n")");
+                std::cout << "    lea printf_format_char, %rdi\n";
+                std::cout << "    mov %rax, %rsi\n";
+                break;
+            default:
+                break;
+        }
+        std::cout << "    call printf\n"; // 调用printf外部函数.
+    }
+
     void visit(FunctionCall_AST_Node &node) override {
         int float_count = 0, others_count = 0;
         // 实参入栈.
@@ -2105,21 +2164,6 @@ public:
 
         std::cout << "L." << node.funcName << ".return:\n";
 
-        // 若想调用printf打印，则prepare“格式控制字符串”.
-        if (print_it && node.funcName == "main") {
-            std::cout << "    lea printf_format, %rdi\n";  // printf_format位于.data段
-            if (type_returned_of_current_function == Type_float) // 打印float数值，准备格式串
-                print_format_string = R"(  .string   "%f\n" )";
-            else if (type_returned_of_current_function == Type_char) { // 打印char，准备格式串
-                std::cout << "    mov %rax, %rsi\n";
-                print_format_string = R"(  .string   "%c\n" )";
-            } else {  // 打印整数等数值，准备格式串.
-                std::cout << "    mov %rax, %rsi\n";
-                print_format_string = R"(  .string   "%d\n" )";
-            }
-            std::cout << "    call printf\n"; // 调用printf外部函数.
-        }
-
         // Epilogue
         std::cout << "    mov %rbp, %rsp\n";
         std::cout << "    pop %rbp\n";
@@ -2140,15 +2184,15 @@ void CodeGenerator::code_generate(AST_Node &tree) {
     std::cout << "\n" << "    .data\n";
     for (auto &gvar: globals) {
         std::cout << gvar.name << ":\n";
-        if (gvar.type == Type_int)
-            std::cout << "    .long " << gvar.initialValueLiteral << "\n";
-        else if (gvar.type == Type_float)
+        if (gvar.type == Type_float)
             std::cout << "    .double " << gvar.initialValueLiteral << "\n";
+        else // if (gvar.type == Type_int)
+            std::cout << "    .long " << gvar.initialValueLiteral << "\n";
     }
     // 若想调用printf打印，则在.data段的最后添加“格式控制字符串”.
-    if (print_it) {
-        std::cout << "printf_format:\n";
-        std::cout << print_format_string << std::endl;
+    for (auto & f : print_format_strings) {
+        std::cout << f.first << ":\n";
+        std::cout << f.second << std::endl;
     }
 }
 
