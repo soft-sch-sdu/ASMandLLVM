@@ -672,11 +672,13 @@ public:
 /// for语句对应的结点
 class For_AST_Node : public AST_Node {
 public:
-    std::shared_ptr<AST_Node> condition;
-    std::shared_ptr<AST_Node> statement;
+    std::shared_ptr<AST_Node> initialization;  // for (expression? ;;)
+    std::shared_ptr<AST_Node> condition;       // for (;expression;)
+    std::shared_ptr<AST_Node> increment;       // for (;;expression)
+    std::shared_ptr<AST_Node> statement;       // for () statement
 
-    For_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> stmt)
-            : condition(std::move(con)), statement(std::move(stmt)) {}
+    For_AST_Node(std::shared_ptr<AST_Node> init, std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> inc, std::shared_ptr<AST_Node> stmt)
+            : initialization(std::move(init)), condition(std::move(con)),  increment(std::move(inc)), statement(std::move(stmt)) {}
 
     void accept(Visitor &v) override { v.visit(*this); }
 };
@@ -1160,6 +1162,7 @@ std::shared_ptr<AST_Node> Parser::variable_declaration() {
 //                   | "while" "(" expression ")" statement
 //                   | "break" ";"
 //                   | "continue" ";"
+//                   | for" "(" expression? ";" expression ";" expression? ")" statement
 std::shared_ptr<AST_Node> Parser::statement() {
     // block
     if (CurrentToken.type == TK_LBRACE) return block();
@@ -1210,18 +1213,23 @@ std::shared_ptr<AST_Node> Parser::statement() {
     }
 
     // "for" "(" expression? ";" expression ";" expression? ")" statement
-//    if (CurrentToken.type == TK_FOR) {
-//        eatCurrentToken(); // eat "for"
-//        std::shared_ptr<AST_Node> ..., stmt;
-//        if (CurrentToken.type == TK_LPAREN) {
-//            eatCurrentToken(); // eat "("
-//            ...
-//            if (CurrentToken.type == TK_RPAREN)
-//                eatCurrentToken(); // eat ")"
-//        }
-//        stmt = statement();
-//        return std::make_shared<For_AST_Node>(..., stmt);
-//    }
+    if (CurrentToken.type == TK_FOR) {
+        eatCurrentToken(); // eat "for"
+        std::shared_ptr<AST_Node> initialization, condition, increment, stmt;
+        if (CurrentToken.type == TK_LPAREN) {
+            eatCurrentToken(); // eat "("
+            if (CurrentToken.type != TK_SEMICOLON)
+                initialization = expression();
+            eatCurrentToken(); // eat ";"
+            condition = expression();
+            eatCurrentToken(); // eat ";"
+            if (CurrentToken.type != TK_RPAREN)
+                increment = expression();
+            eatCurrentToken(); // eat ")"
+        }
+        stmt = statement();
+        return std::make_shared<For_AST_Node>(initialization, condition, increment, stmt);
+    }
 
     // "break" ";"
     if (CurrentToken.type == TK_BREAK) {
@@ -1551,7 +1559,18 @@ public:
             node.statement->accept(*this);
     }
 
-    void visit(For_AST_Node &node) override {}
+    void visit(For_AST_Node &node) override {
+        if (node.initialization != nullptr)
+            node.initialization->accept(*this);
+
+        node.condition->accept(*this);
+
+        if (node.increment != nullptr)
+            node.increment->accept(*this);
+
+
+        node.statement->accept(*this);
+    }
 
     void visit(Break_AST_Node &node) override {}
 
@@ -1999,7 +2018,24 @@ public:
         current_continue_label = previous_continue_label;
     }
 
-    void visit(For_AST_Node &node) override {}
+    void visit(For_AST_Node &node) override {
+        auto_label_no += 1;
+        std::string auto_label = std::to_string(auto_label_no);
+        std::string previous_break_label = current_break_label;
+        std::string previous_continue_label = current_continue_label;
+
+        if (node.initialization != nullptr) node.initialization->accept(*this);
+        std::cout << ".L.condition." << auto_label << ":\n";
+        node.condition->accept(*this);
+        std::cout << "    je  .L.end." << auto_label << std::endl;
+        node.statement->accept(*this);
+        if (node.increment != nullptr) node.increment->accept(*this);
+        std::cout << "    jmp  .L.condition." << auto_label << std::endl;
+        std::cout << ".L.end." << auto_label << ":\n";
+
+        current_break_label = previous_break_label;
+        current_continue_label = previous_continue_label;
+    }
 
     void visit(Break_AST_Node &node) override {
         std::cout << "    jmp " << current_break_label << std::endl;
