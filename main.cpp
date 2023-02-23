@@ -553,7 +553,7 @@ class FunctionCall_AST_Node;
 
 class Program_AST_Node;
 
-// Visitor类定义. (Visitor类是SemanticVisitor和CodeGenerator的基类，这两个派生类的定义在各个AST_Node派生类的定义之后)
+// Visitor类定义. (Visitor类是SemanticVisitor和X86_CodeGenerator的基类，这两个派生类的定义在各个AST_Node派生类的定义之后)
 class Visitor {
 public:
     virtual void visit(NumLiteral_AST_Node &node) = 0;
@@ -718,7 +718,7 @@ public:
     void accept(Visitor &v) override { v.visit(*this); }
 };
 
-/// 二元运算对应的结点
+/// 二元运算对应的结点（注意，实际上，此即expression对应的node）
 class BinaryOperator_AST_Node : public AST_Node {
 public:
     std::shared_ptr<AST_Node> left;
@@ -1707,7 +1707,7 @@ std::string parameter_registers_float[8] = {{"xmm0"},
                                             {"xmm6"},
                                             {"xmm7"}};
 
-class CodeGenerator : public Visitor {
+class X86_CodeGenerator : public Visitor {
 private:
     // Round up `n` to the nearest multiple of `align`. For instance,
     // align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
@@ -1718,7 +1718,7 @@ private:
     int auto_label_no = 0;
 
 public:
-    void code_generate(AST_Node &tree);
+    void X86_code_generate(AST_Node &tree);
 
     void visit(NumLiteral_AST_Node &node) override {
         if (node.baseType == Type_int)
@@ -2017,6 +2017,7 @@ public:
     }
 
     void visit(If_AST_Node &node) override {
+        // 此处的label，也可以如龙书第2章2.8.4小节所述，作为If_AST_Node的属性，在其构造函数中确定。
         auto_label_no += 1;
         std::string auto_label = std::to_string(auto_label_no);
 
@@ -2177,7 +2178,7 @@ public:
     }
 };
 
-void CodeGenerator::code_generate(AST_Node &tree) {
+void X86_CodeGenerator::X86_code_generate(AST_Node &tree) {
     tree.accept(*this);
 
     // global and static variables.
@@ -2244,9 +2245,8 @@ int main(int argc, char *argv[]) {
     semantic_analyzer.analyze(*tree);
 
     // 代码生成.
-//    print_it = true;
-    CodeGenerator code_generator;
-    code_generator.code_generate(*tree);
+    X86_CodeGenerator X86_code_generator;
+    X86_code_generator.X86_code_generate(*tree);
 }
 
 
