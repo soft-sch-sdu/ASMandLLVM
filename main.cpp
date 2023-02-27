@@ -1,3 +1,25 @@
+/****************LLVM****************************/
+#include "llvm/ADT/APFloat.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Host.h"
+#include "llvm/Support/raw_ostream.h"
+
+
+using namespace llvm;
+using namespace llvm::sys;
+
+/************************************************/
+
 #include <iostream>
 
 // 引入目的：将源代码读进input_string，即字符流.
@@ -16,16 +38,16 @@
 
 
 // 运算符、表达式、变量等的类型(其中，除Type_array外，皆是基础类型，即base-type, 或builtin-type).
-typedef enum Type {
-    Type_int,
-    Type_float,
-    Type_bool,
-    Type_void,
-    Type_char,
-    Type_array,
-} Type;
+typedef enum Ty {
+    Ty_int,
+    Ty_float,
+    Ty_bool,
+    Ty_void,
+    Ty_char,
+    Ty_array,
+} Ty;
 
-Type type_returned_of_current_function;
+Ty type_returned_of_current_function;
 
 // 字符流，是Lexer的输入. main()函数负责把源代码读入input_string.
 static std::string input_string;
@@ -448,9 +470,9 @@ std::vector<TOKEN> Lexer::constructTokenStream() {
 class Symbol {
 public:
     std::string name;
-    Type type;
+    Ty type;
 
-    Symbol(std::string sym_name, Type sym_type) :
+    Symbol(std::string sym_name, Ty sym_type) :
             name(std::move(sym_name)), type(sym_type) {}
 
     // 为了使用std::dynamic_pointer_cast，此virtual析构函数不可少
@@ -460,15 +482,15 @@ public:
 class Variable_Symbol : public Symbol {
 public:
     int offset;  // 针对局部变量，包括数组
-    Type baseType;
+    Ty baseType;
 
-    Variable_Symbol(std::string sym_name, Type sym_type, Type sym_base_type, int sym_offset) :
+    Variable_Symbol(std::string sym_name, Ty sym_type, Ty sym_base_type, int sym_offset) :
             Symbol(std::move(sym_name), sym_type), baseType(sym_base_type), offset(sym_offset) {}
 };
 
 class Function_Symbol : public Symbol {
 public:
-    Function_Symbol(std::string sym_name, Type sym_type) :
+    Function_Symbol(std::string sym_name, Ty sym_type) :
             Symbol(std::move(sym_name), sym_type) {}
 };
 
@@ -556,59 +578,60 @@ class Program_AST_Node;
 // Visitor类定义. (Visitor类是SemanticVisitor和X86_CodeGenerator的基类，这两个派生类的定义在各个AST_Node派生类的定义之后)
 class Visitor {
 public:
-    virtual void visit(NumLiteral_AST_Node &node) = 0;
+    virtual Value *visit(NumLiteral_AST_Node &node) = 0;
 
-    virtual void visit(Assignment_AST_Node &node) = 0;
+    virtual Value *visit(Assignment_AST_Node &node) = 0;
 
-    virtual void visit(Return_AST_Node &node) = 0;
+    virtual Value *visit(Return_AST_Node &node) = 0;
 
-    virtual void visit(BinaryOperator_AST_Node &node) = 0;
+    virtual Value *visit(BinaryOperator_AST_Node &node) = 0;
 
-    virtual void visit(UnaryOperator_AST_Node &node) = 0;
+    virtual Value *visit(UnaryOperator_AST_Node &node) = 0;
 
-    virtual void visit(Variable_AST_Node &node) = 0;
+    virtual Value *visit(Variable_AST_Node &node) = 0;
 
-    virtual void visit(BaseType_AST_Node &node) = 0;
+    virtual Value *visit(BaseType_AST_Node &node) = 0;
 
-    virtual void visit(Block_AST_Node &node) = 0;
+    virtual Value *visit(Block_AST_Node &node) = 0;
 
-    virtual void visit(If_AST_Node &node) = 0;
+    virtual Value *visit(If_AST_Node &node) = 0;
 
-    virtual void visit(While_AST_Node &node) = 0;
+    virtual Value *visit(While_AST_Node &node) = 0;
 
-    virtual void visit(For_AST_Node &node) = 0;
+    virtual Value *visit(For_AST_Node &node) = 0;
 
-    virtual void visit(Break_AST_Node &node) = 0;
+    virtual Value *visit(Break_AST_Node &node) = 0;
 
-    virtual void visit(Continue_AST_Node &node) = 0;
+    virtual Value *visit(Continue_AST_Node &node) = 0;
 
-    virtual void visit(Print_AST_Node &node) = 0;
+    virtual Value *visit(Print_AST_Node &node) = 0;
 
-    virtual void visit(SingleVariableDeclaration_AST_Node &node) = 0;
+    virtual Value *visit(SingleVariableDeclaration_AST_Node &node) = 0;
 
-    virtual void visit(Parameter_AST_Node &node) = 0;
+    virtual Value *visit(Parameter_AST_Node &node) = 0;
 
-    virtual void visit(VariableDeclarations_AST_Node &node) = 0;
+    virtual Value *visit(VariableDeclarations_AST_Node &node) = 0;
 
-    virtual void visit(FunctionDeclaration_AST_Node &node) = 0;
+    virtual Value *visit(FunctionDeclaration_AST_Node &node) = 0;
 
-    virtual void visit(FunctionCall_AST_Node &node) = 0;
+    virtual Value *visit(FunctionCall_AST_Node &node) = 0;
 
-    virtual void visit(Program_AST_Node &node) = 0;
+    virtual Value *visit(Program_AST_Node &node) = 0;
 };
 
-// 注意：各种AST_Node的定义中，若出现TOKEN是不太合适的
-/// AST_Node - 各个AST_Node派生类的基类.
+/// AST_Node - 各种结点类***_AST_Node的基类.
 class AST_Node {
 public:
-    // 为某些结点(比如变量、表达式等对应的结点)设置数据类型属性，将在Visitor访问该结点时的相关处理带来方便.
-    // 当然，这些属性信息也可以保存在符号表中，至于如何选择看喜好.
-    Type type = Type_void;
-    Type baseType = Type_void;
+    /* 为某些结点(比如变量、表达式等)设置数据类型属性，方便各种Visitor访问时的处理.
+       当然，这些属性信息也可以保存在符号表中，可依喜好选择. */
+    // 类型：可以是int、float等基本类型，也可以是数组、结构体等结构化类型
+    Ty type = Ty_void;
+    // 基本类型：只能是int、float、char、bool等
+    Ty baseType = Ty_void;
 
     virtual ~AST_Node() = default;
 
-    virtual void accept(Visitor &v) = 0;
+    virtual Value *accept(Visitor &v) = 0;
 };
 
 /// NumLiteral_AST_Node - 整数、浮点数、布尔常量的字面量
@@ -617,13 +640,18 @@ public:
     std::string literal;
 
     explicit NumLiteral_AST_Node(TOKEN &tok) : literal(tok.lexeme) {
-        if (tok.type == TK_INT_LITERAL) type = Type_int;
-        else if (tok.type == TK_FLOAT_LITERAL) type = Type_float;
-        else if (tok.type == TK_BOOL_LITERAL) type = Type_bool;
-        else if (tok.type == TK_CHAR_LITERAL) type = Type_char;
+        if (tok.type == TK_INT_LITERAL) type = Ty_int;
+        else if (tok.type == TK_FLOAT_LITERAL) type = Ty_float;
+        else if (tok.type == TK_BOOL_LITERAL) {
+            type = Ty_bool;
+            if (std::string(literal) == std::string("true")) literal = "1";
+            else literal = "0";
+        } else if (tok.type == TK_CHAR_LITERAL) type = Ty_char;
     }
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// 赋值语句对应的结点
@@ -636,7 +664,9 @@ public:
     Assignment_AST_Node(std::shared_ptr<AST_Node> leftvalue, std::string op, std::shared_ptr<AST_Node> rightvalue)
             : left(std::move(leftvalue)), operation(std::move(op)), right(std::move(rightvalue)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// return语句对应的结点
@@ -648,7 +678,9 @@ public:
     explicit Return_AST_Node(std::shared_ptr<AST_Node> expr) :
             expression(std::move(expr)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// if语句对应的结点
@@ -661,7 +693,9 @@ public:
     If_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> then_stmt, std::shared_ptr<AST_Node> else_stmt)
             : condition(std::move(con)), then_statement(std::move(then_stmt)), else_statement(std::move(else_stmt)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// while语句对应的结点
@@ -674,7 +708,9 @@ public:
     While_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> stmt)
             : condition(std::move(con)), statement(std::move(stmt)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// for语句对应的结点
@@ -690,7 +726,9 @@ public:
             : initialization(std::move(init)), condition(std::move(con)), increment(std::move(inc)),
               statement(std::move(stmt)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// break语句对应的结点
@@ -698,7 +736,9 @@ class Break_AST_Node : public AST_Node {
 public:
     std::string break_label;
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// continue语句对应的结点
@@ -706,16 +746,21 @@ class Continue_AST_Node : public AST_Node {
 public:
     std::string continue_label;
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// print语句对应的结点
 class Print_AST_Node : public AST_Node {
 public:
     std::shared_ptr<AST_Node> value;
+
     explicit Print_AST_Node(std::shared_ptr<AST_Node> v) : value(std::move(v)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// 二元运算对应的结点（注意，实际上，此即expression对应的node）
@@ -728,7 +773,9 @@ public:
     BinaryOperator_AST_Node(std::shared_ptr<AST_Node> Left, TOKEN_TYPE op, std::shared_ptr<AST_Node> Right)
             : left(std::move(Left)), op(op), right(std::move(Right)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// 单个变量声明对应的结点
@@ -741,7 +788,9 @@ public:
                                        std::vector<std::shared_ptr<AST_Node>> assignNodes)
             : type(std::move(typeNode)), var(std::move(varNode)), inits(std::move(assignNodes)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// 变量声明语句对应的结点，注意：一个变量声明语句可能同时声明多个变量
@@ -752,7 +801,9 @@ public:
     explicit VariableDeclarations_AST_Node(std::vector<std::shared_ptr<AST_Node>> newVarDeclarations)
             : varDeclarations(std::move(newVarDeclarations)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// 一元运算对应的结点
@@ -764,14 +815,18 @@ public:
     UnaryOperator_AST_Node(TOKEN_TYPE op, std::shared_ptr<AST_Node> Right)
             : op(op), right(std::move(Right)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// 变量声明时的类型或函数定义中返回值的类型所对应的结点
 class BaseType_AST_Node : public AST_Node {
 public:
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 /// 变量结点，变量声明和每次变量引用时都对应单独的变量结点，但对应的符号表项只有一个
@@ -786,7 +841,9 @@ public:
 
     explicit Variable_AST_Node(std::string var) : var_name(std::move(var)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 class Parameter_AST_Node : public AST_Node {
@@ -798,7 +855,9 @@ public:
     Parameter_AST_Node(std::shared_ptr<AST_Node> typeNode, std::shared_ptr<AST_Node> varNode)
             : parameterType(std::move(typeNode)), parameterVar(std::move(varNode)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 class Block_AST_Node : public AST_Node {
@@ -808,7 +867,9 @@ public:
     explicit Block_AST_Node(std::vector<std::shared_ptr<AST_Node>> newStatements)
             : statements(std::move(newStatements)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 class FunctionDeclaration_AST_Node : public AST_Node {
@@ -824,7 +885,9 @@ public:
                                  std::shared_ptr<AST_Node> b) :
             funcType(std::move(t)), funcName(std::move(n)), formalParams(p), funcBlock(std::move(b)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 class FunctionCall_AST_Node : public AST_Node {
@@ -835,7 +898,9 @@ public:
     FunctionCall_AST_Node(std::string name, std::vector<std::shared_ptr<AST_Node>> args) :
             funcName(std::move(name)), arguments(std::move(args)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 
 class Program_AST_Node : public AST_Node {
@@ -849,7 +914,9 @@ public:
                      std::vector<std::shared_ptr<FunctionDeclaration_AST_Node>> newFuncDeclList) :
             gvarDeclarationsList(std::move(newVarDeclList)), funcDeclarationList(std::move(newFuncDeclList)) {}
 
-    void accept(Visitor &v) override { v.visit(*this); }
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
 };
 //===----------------------------------------------------------------------===//
 // Parser
@@ -960,7 +1027,7 @@ std::shared_ptr<AST_Node> Parser::primary() {
         if (CurrentToken.type == TK_LBRACK) {
             eatCurrentToken();  // eat "["
             variableNode->indexExpression = expression();
-            variableNode->type = Type_array;
+            variableNode->type = Ty_array;
             eatCurrentToken();   // eat "]"
         }
         // 变量2：基本变量
@@ -1093,7 +1160,7 @@ std::shared_ptr<AST_Node> Parser::declarator() {
         if (CurrentToken.type == TK_LBRACK) {
             eatCurrentToken(); // eat "["
             node->length = std::stoi(CurrentToken.lexeme);
-            node->type = Type_array;
+            node->type = Ty_array;
             eatCurrentToken(); // eat length
             eatCurrentToken(); // eat "]"
         }
@@ -1107,19 +1174,19 @@ std::shared_ptr<AST_Node> Parser::type_specification() {
     auto node = std::make_shared<BaseType_AST_Node>();
     switch (CurrentToken.type) {
         case TK_INT:
-            node->type = Type_int;
+            node->type = Ty_int;
             break;
         case TK_FLOAT:
-            node->type = Type_float;
+            node->type = Ty_float;
             break;
         case TK_CHAR:
-            node->type = Type_char;
+            node->type = Ty_char;
             break;
         case TK_VOID:
-            node->type = Type_void;
+            node->type = Ty_void;
             break;
         case TK_BOOL:
-            node->type = Type_bool;
+            node->type = Ty_bool;
             break;
         default:
             break;
@@ -1146,12 +1213,12 @@ std::shared_ptr<AST_Node> Parser::variable_declaration() {
                 while (CurrentToken.type != TK_RBRACE) {
                     // newVarNode是赋值语句左边的数组元素对应的变量
                     auto newVarNode = std::make_shared<Variable_AST_Node>(variableNode->var_name);
-                    newVarNode->type = Type_array;
+                    newVarNode->type = Ty_array;
                     newVarNode->baseType = basetypeNode->type;
                     // 构建一个与数组元素下标对应的表达式，即primary := identifier "[" expression "]"中的expression.
                     TOKEN tok = TOKEN{TK_INT_LITERAL, std::to_string(i), 0, 0};
                     auto indexNode = std::make_shared<NumLiteral_AST_Node>(tok);
-                    indexNode->type = Type_int;
+                    indexNode->type = Ty_int;
                     newVarNode->indexExpression = indexNode;
 
                     initNodes.push_back(
@@ -1420,7 +1487,7 @@ std::shared_ptr<AST_Node> Parser::parse() {
 
 struct global_variable {
     std::string name;
-    Type type;
+    Ty type;
     std::string initialValueLiteral;
 };
 
@@ -1436,11 +1503,12 @@ public:
         tree.accept(*this);
     }
 
-    void visit(NumLiteral_AST_Node &node) override {
+    Value *visit(NumLiteral_AST_Node &node) override {
         node.baseType = node.type;
+        return nullptr;
     }
 
-    void visit(Return_AST_Node &node) override {
+    Value *visit(Return_AST_Node &node) override {
         // 确定与return语句配对的函数名.
         std::shared_ptr<ScopedSymbolTable> tempScope = currentScope;
         while (tempScope != nullptr) {
@@ -1452,7 +1520,7 @@ public:
         }
 
         // case: "return ;"
-        if (node.expression == nullptr) node.baseType = Type_void;
+        if (node.expression == nullptr) node.baseType = Ty_void;
             // other cases:
         else {
             node.expression->accept(*this);
@@ -1472,44 +1540,51 @@ public:
 
         // 类型转换也可以放在visit BinaryOperation的时候进行.
         // 下面这种不一致有点严重，退出.
-        if (node.baseType == Type_void && functionSymbol->type != Type_void) {
+        if (node.baseType == Ty_void && functionSymbol->type != Ty_void) {
             fprintf(stderr, "return type of %s should not be void!\n", node.functionName.c_str());
             exit(1);
         }
+        return nullptr;
     }
 
-    void visit(Assignment_AST_Node &node) override {
+    Value *visit(Assignment_AST_Node &node) override {
         node.left->accept(*this);
         node.right->accept(*this);
         node.type = node.left->type;
         node.baseType = node.left->baseType;
+        return nullptr;
     }
 
-    void visit(BinaryOperator_AST_Node &node) override {
+    Value *visit(BinaryOperator_AST_Node &node) override {
         node.left->accept(*this);
         node.right->accept(*this);
         // 检查运算数是否兼容.
-        Type left_Type = node.left->baseType;
-        Type right_Type = node.right->baseType;
+        Ty left_Type = node.left->baseType;
+        Ty right_Type = node.right->baseType;
         // 若兼容，取大，即bool < char < int < float
         node.baseType = (left_Type > right_Type) ? left_Type : right_Type;
+        return nullptr;
     }
 
-    void visit(UnaryOperator_AST_Node &node) override {
+    Value *visit(UnaryOperator_AST_Node &node) override {
         node.right->accept(*this);
         node.baseType = node.right->baseType;
+        return nullptr;
     }
 
-    void visit(BaseType_AST_Node &node) override {}
+    Value *visit(BaseType_AST_Node &node) override {
+        node.baseType = node.type;
+        return nullptr;
+    }
 
-    void visit(SingleVariableDeclaration_AST_Node &node) override {
+    Value *visit(SingleVariableDeclaration_AST_Node &node) override {
         // 类型.
         node.type->accept(*this);
         std::shared_ptr<BaseType_AST_Node> basetypeNode = std::dynamic_pointer_cast<BaseType_AST_Node>(node.type);
         std::shared_ptr<Variable_AST_Node> varNode = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
         // varNode与basetypeNode是兄弟结点，用属性文法的术语讲，varNode的baseType属性是继承属性.
         // 该属性值的计算属SDT的内容，还是属于语义分析的内容？
-        if (varNode->type == Type_array) varNode->baseType = basetypeNode->type;
+        if (varNode->type == Ty_array) varNode->baseType = basetypeNode->type;
         else varNode->type = varNode->baseType = basetypeNode->type;
         std::vector<std::shared_ptr<Assignment_AST_Node>> initNodes;
         for (auto &init: node.inits)
@@ -1529,11 +1604,11 @@ public:
                 }
                 globals.push_back(global_variable{varNode->var_name, basetypeNode->type, l});
             } else {  // 局部变量.
-                if (varNode->type != Type_array) {  // 1.非数组.
-                    if (basetypeNode->type == Type_char) offsetSum += 1;
+                if (varNode->type != Ty_array) {  // 1.非数组.
+                    if (basetypeNode->type == Ty_char) offsetSum += 1;
                     else offsetSum += 8;
                 } else {                            // 2.数组.
-                    if (basetypeNode->type == Type_int || basetypeNode->type == Type_float)
+                    if (basetypeNode->type == Ty_int || basetypeNode->type == Ty_float)
                         offsetSum = offsetSum + varNode->length * 8;
                 }
                 varSymbol = std::make_shared<Variable_Symbol>(varNode->var_name, varNode->type, basetypeNode->type,
@@ -1549,14 +1624,16 @@ public:
         // 初始化.
         for (auto &init: node.inits)
             if (init != nullptr) init->accept(*this);
+        return nullptr;
     }
 
-    void visit(VariableDeclarations_AST_Node &node) override {
+    Value *visit(VariableDeclarations_AST_Node &node) override {
         if (!node.varDeclarations.empty())
             for (auto &n: node.varDeclarations) n->accept(*this);
+        return nullptr;
     }
 
-    void visit(Variable_AST_Node &node) override {
+    Value *visit(Variable_AST_Node &node) override {
         auto varSymbol = std::dynamic_pointer_cast<Variable_Symbol>(currentScope->lookup(node.var_name, false));
         if (varSymbol == nullptr) {
             fprintf(stderr, "something wrong with %s\n", node.var_name.c_str());
@@ -1566,30 +1643,34 @@ public:
         node.baseType = varSymbol->baseType;
         if (node.symbol == nullptr) node.symbol = varSymbol;
         if (node.indexExpression != nullptr) node.indexExpression->accept(*this);
+        return nullptr;
     }
 
-    void visit(Block_AST_Node &node) override {
+    Value *visit(Block_AST_Node &node) override {
         if (!node.statements.empty())
             for (auto &n: node.statements) n->accept(*this);
+        return nullptr;
     }
 
-    void visit(If_AST_Node &node) override {
+    Value *visit(If_AST_Node &node) override {
         if (node.condition != nullptr)
             node.condition->accept(*this);
         if (node.then_statement != nullptr)
             node.then_statement->accept(*this);
         if (node.else_statement != nullptr)
             node.else_statement->accept(*this);
+        return nullptr;
     }
 
-    void visit(While_AST_Node &node) override {
+    Value *visit(While_AST_Node &node) override {
         if (node.condition != nullptr)
             node.condition->accept(*this);
         if (node.statement != nullptr)
             node.statement->accept(*this);
+        return nullptr;
     }
 
-    void visit(For_AST_Node &node) override {
+    Value *visit(For_AST_Node &node) override {
         if (node.initialization != nullptr)
             node.initialization->accept(*this);
 
@@ -1600,17 +1681,19 @@ public:
 
 
         node.statement->accept(*this);
+        return nullptr;
     }
 
-    void visit(Break_AST_Node &node) override {}
+    Value *visit(Break_AST_Node &node) override { return nullptr; }
 
-    void visit(Continue_AST_Node &node) override {}
+    Value *visit(Continue_AST_Node &node) override { return nullptr; }
 
-    void visit(Print_AST_Node &node) override {
+    Value *visit(Print_AST_Node &node) override {
         if (node.value != nullptr) node.value->accept(*this);
+        return nullptr;
     }
 
-    void visit(FunctionCall_AST_Node &node) override {
+    Value *visit(FunctionCall_AST_Node &node) override {
         std::shared_ptr<Symbol> functionSymbol = currentScope->lookup(node.funcName, false);
         if (functionSymbol == nullptr) {
             fprintf(stderr, "something wrong!!!\n");
@@ -1619,9 +1702,10 @@ public:
         node.type = node.baseType = functionSymbol->type;
         // 目的是为了确定每一个实参node的Type.
         for (auto &eachArg: node.arguments) eachArg->accept(*this);
+        return nullptr;
     }
 
-    void visit(Parameter_AST_Node &node) override {
+    Value *visit(Parameter_AST_Node &node) override {
         // 类型.
         node.parameterType->accept(*this);
         node.type = node.parameterType->type;
@@ -1636,9 +1720,10 @@ public:
                                                      -offsetSum);
         currentScope->insert(sym);
         node.symbol = sym;
+        return nullptr;
     }
 
-    void visit(FunctionDeclaration_AST_Node &node) override {
+    Value *visit(FunctionDeclaration_AST_Node &node) override {
         offsetSum = 0;  // 为每个函数初始化offsetSum.
 
         // visit类型结点.
@@ -1667,9 +1752,10 @@ public:
         node.funcBlock->accept(*this);
 
         node.offset = offsetSum; // 此值即代码生成阶段的stack_size.
+        return nullptr;
     }
 
-    void visit(Program_AST_Node &node) override {
+    Value *visit(Program_AST_Node &node) override {
         // 创建global scope (program) symbol_table.
         std::map<std::string, std::shared_ptr<Symbol>> symbols;
         // level = 0
@@ -1684,11 +1770,12 @@ public:
 
         if (!node.funcDeclarationList.empty())
             for (auto &func: node.funcDeclarationList) func->accept(*this);
+        return nullptr;
     }
 };
 
 //===----------------------------------------------------------------------===//
-// Code generator derived from Visitor
+// X86_Code generator derived from Visitor
 //===----------------------------------------------------------------------===//
 
 std::string parameter_registers[6] = {{"rdi"},
@@ -1720,10 +1807,10 @@ private:
 public:
     void X86_code_generate(AST_Node &tree);
 
-    void visit(NumLiteral_AST_Node &node) override {
-        if (node.baseType == Type_int)
+    Value *visit(NumLiteral_AST_Node &node) override {
+        if (node.baseType == Ty_int)
             std::cout << "    mov $" << node.literal << ", %rax\n";
-        else if (node.baseType == Type_float) {
+        else if (node.baseType == Ty_float) {
             union {
                 double f64;
                 uint64_t u64;
@@ -1731,19 +1818,21 @@ public:
             u.f64 = strtod(node.literal.c_str(), nullptr);
             std::cout << "    mov $" << u.u64 << ", %rax   # float " << u.f64 << "\n";
             std::cout << "    movq %rax, %xmm0\n";
-        } else if (node.baseType == Type_bool) {
+        } else if (node.baseType == Ty_bool) {
             // 类似c语言，true用整数1表示，flase用整数0表示.
-            if (node.literal == "true") std::cout << "    mov $1, %rax\n";
+            if (node.literal == "1") std::cout << "    mov $1, %rax\n";
             else std::cout << "    mov $0, %rax\n";
-        } else if (node.baseType == Type_char) {
+        } else if (node.baseType == Ty_char) {
             char c = node.literal.front();
             std::cout << "    mov $" << (int) c << ", %rax   # char " << "\n";
         }
+        return nullptr;
     }
 
-    void visit(Return_AST_Node &node) override {
+    Value *visit(Return_AST_Node &node) override {
         if (node.expression != nullptr) node.expression->accept(*this);
         std::cout << "    jmp L." << node.functionName << ".return\n";
+        return nullptr;
     }
 
     void generate_variable_address(Variable_AST_Node &varNode) {
@@ -1752,7 +1841,7 @@ public:
         if (var_offset == 0)  // offset=0，则是全局变量，位于.data段
             std::cout << "    lea " << varNode.var_name << "(%rip), %rax\n";
             /* 2. 局部变量 */
-        else if (varNode.type == Type_array) { // 若是数组元素，数组各个元素从左往右，内存地址从小到大(从下到上).
+        else if (varNode.type == Ty_array) { // 若是数组元素，数组各个元素从左往右，内存地址从小到大(从下到上).
             varNode.indexExpression->accept(*this);
             std::cout << "    imul $8, %rax" << std::endl;
             std::cout << "    push %rax" << std::endl;
@@ -1763,7 +1852,7 @@ public:
             std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
     }
 
-    void visit(Assignment_AST_Node &node) override {
+    Value *visit(Assignment_AST_Node &node) override {
         // 赋值语句的左值是地址.
         // 获取该地址，放入%rax，并由%rax入栈.
         generate_variable_address(*std::dynamic_pointer_cast<Variable_AST_Node>(node.left));
@@ -1773,19 +1862,20 @@ public:
         node.right->accept(*this);
         std::cout << "    pop %rdi\n";
         // 若right-side是int类型的结果，则位于%rax; 若是float类型，则位于%xxm0.
-        if (node.baseType == Type_float) { // float类型的结果.
-            if (node.right->baseType < Type_float) // 若%rax参与float类型的运算，
+        if (node.baseType == Ty_float) { // float类型的结果.
+            if (node.right->baseType < Ty_float) // 若%rax参与float类型的运算，
                 std::cout << "    cvtsi2sd %rax, %xmm0\n"; // 则需将之转换成float类型，并放入%xmm0.
             std::cout << "    movsd %xmm0, (%rdi)\n";
         } else std::cout << "    mov %rax, (%rdi)\n"; // int or bool, 即int类型的结果.
+        return nullptr;
     }
 
-    void visit(BinaryOperator_AST_Node &node) override {
+    Value *visit(BinaryOperator_AST_Node &node) override {
         /* 1. float类型 */
-        if (node.baseType == Type_float) {
+        if (node.baseType == Ty_float) {
             // 算符右侧运算数.
             node.right->accept(*this);
-            if (node.right->baseType < Type_float) { // 整数转换为浮点数.
+            if (node.right->baseType < Ty_float) { // 整数转换为浮点数.
                 std::cout << "    cvtsi2sd %rax, %xmm0" << std::endl;
             }
             // push float
@@ -1794,7 +1884,7 @@ public:
 
             // 算符左侧运算数.
             node.left->accept(*this);
-            if (node.left->baseType < Type_float) { // 整数转换为浮点数.
+            if (node.left->baseType < Ty_float) { // 整数转换为浮点数.
                 std::cout << "    cvtsi2sd %rax, %xmm0" << std::endl;
             }
             // pop float
@@ -1804,16 +1894,16 @@ public:
             switch (node.op) {
                 case TK_PLUS:
                     std::cout << "    addsd %xmm1, %xmm0" << std::endl;
-                    return;
+                    return nullptr;
                 case TK_MINUS:
                     std::cout << "    subsd %xmm1, %xmm0" << std::endl;
-                    return;
+                    return nullptr;
                 case TK_MULorDEREF:
                     std::cout << "    mulsd %xmm1, %xmm0" << std::endl;
-                    return;
+                    return nullptr;
                 case TK_DIV:
                     std::cout << "    divsd %xmm1, %xmm0" << std::endl;
-                    return;
+                    return nullptr;
                 case TK_EQ: // "=="
                 case TK_NE: // "!="
                 case TK_LT: // "<"
@@ -1850,11 +1940,11 @@ public:
                     }
                     std::cout << "    and $1, %al" << std::endl;
                     std::cout << "    movzb %al, %rax" << std::endl;
-                    return;
+                    return nullptr;
                 }
 
                 default:
-                    return;
+                    return nullptr;
             }
         }
 
@@ -1868,19 +1958,19 @@ public:
         switch (node.op) {
             case TK_PLUS: {
                 std::cout << "    add %rdi, %rax" << std::endl;
-                return;
+                return nullptr;
             }
             case TK_MINUS: {
                 std::cout << "    sub %rdi, %rax" << std::endl;
-                return;
+                return nullptr;
             }
             case TK_MULorDEREF: {
                 std::cout << "    imul %rdi, %rax" << std::endl;
-                return;
+                return nullptr;
             }
             case TK_DIV: {
                 std::cout << "    div %rdi, %rax" << std::endl;
-                return;
+                return nullptr;
             }
             case TK_EQ: // "=="
             case TK_NE: // "!="
@@ -1913,20 +2003,20 @@ public:
                         break;
                 }
                 std::cout << "    movzb %al, %rax" << std::endl;
-                return;
+                return nullptr;
             }
             default:
-                return;
+                return nullptr;
         }
     }
 
-    void visit(UnaryOperator_AST_Node &node) override {
+    Value *visit(UnaryOperator_AST_Node &node) override {
         switch (node.op) {
             case TK_PLUS:  // "+"
-                return; // do nothing
+                return nullptr; // do nothing
             case TK_MINUS: { // "-" 取相反数.
                 node.right->accept(*this); // 获得右值，存于%rax.
-                if (node.baseType == Type_int)
+                if (node.baseType == Ty_int)
                     std::cout << "    neg %rax" << std::endl;
                 else {
                     // 下面的四步将一个float取负数，即实现 %xmm0 = (-1) * %xmm0.
@@ -1936,12 +2026,12 @@ public:
                     std::cout << "    cvtsi2sd %rax, %xmm1" << std::endl;
                     std::cout << "    mulsd %xmm1, %xmm0" << std::endl;
                 }
-                return;
+                return nullptr;
             }
             case TK_NOT: { // "!" 取反.
                 node.right->accept(*this); // 该步获得右值，存于%rax.
-                if (node.baseType == Type_bool) std::cout << "    not %rax" << std::endl;
-                return;
+                if (node.baseType == Ty_bool) std::cout << "    not %rax" << std::endl;
+                return nullptr;
             }
 
             case TK_ADDRESS: { // "&" 取地址.
@@ -1952,37 +2042,39 @@ public:
                     std::cout << "    lea " << varNode->var_name << "(%rip), %rax\n";
                 else                  // 否则，是局部变量或参数，位于栈
                     std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
-                return;
+                return nullptr;
             }
             case TK_MULorDEREF: { // "*" 取值.
                 node.right->accept(*this); // 该步获得左值(即地址)，存于%rax.
                 // 然后，将其值由内存放入寄存器.
-                if (node.baseType == Type_float)          // 若是float，
+                if (node.baseType == Ty_float)          // 若是float，
                     std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0.
-                else if (node.baseType == Type_int ||     // 否则，
-                         node.baseType == Type_bool ||
-                         node.baseType == Type_char)
+                else if (node.baseType == Ty_int ||     // 否则，
+                         node.baseType == Ty_bool ||
+                         node.baseType == Ty_char)
                     std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax.
-                return;
+                return nullptr;
             }
             default:
-                return;
+                return nullptr;
         }
     }
 
-    void visit(BaseType_AST_Node &node) override {}
+    Value *visit(BaseType_AST_Node &node) override { return nullptr; }
 
-    void visit(SingleVariableDeclaration_AST_Node &node) override {
+    Value *visit(SingleVariableDeclaration_AST_Node &node) override {
         for (auto &init: node.inits)
             if (init != nullptr) init->accept(*this);
+        return nullptr;
     }
 
-    void visit(VariableDeclarations_AST_Node &node) override {
+    Value *visit(VariableDeclarations_AST_Node &node) override {
         if (!node.varDeclarations.empty())
             for (auto &n: node.varDeclarations) n->accept(*this);
+        return nullptr;
     }
 
-    void visit(Variable_AST_Node &node) override {
+    Value *visit(Variable_AST_Node &node) override {
         /* 变量是右值 */
         // 1.首先，获取其在内存中的地址，存于%rax：
         int var_offset = node.symbol->offset;
@@ -1993,22 +2085,24 @@ public:
             generate_variable_address(node);
 
         // 2.然后，将其值由内存放入寄存器.
-        if (node.baseType == Type_float)          // 若是float，
+        if (node.baseType == Ty_float)          // 若是float，
             std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0.
-        else if (node.baseType == Type_int ||
-                 node.baseType == Type_bool ||
-                 node.baseType == Type_char ||
-                 node.baseType == Type_array)      // 否则，
+        else if (node.baseType == Ty_int ||
+                 node.baseType == Ty_bool ||
+                 node.baseType == Ty_char ||
+                 node.baseType == Ty_array)      // 否则，
             std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax.
+        return nullptr;
     }
 
-    void visit(Block_AST_Node &node) override {
+    Value *visit(Block_AST_Node &node) override {
         if (!node.statements.empty())
             for (auto &n: node.statements) n->accept(*this);
+        return nullptr;
     }
 
     static void compare_zero(std::shared_ptr<AST_Node> &condition) {
-        if (condition->baseType != Type_float)
+        if (condition->baseType != Ty_float)
             std::cout << "    cmp $0, %rax" << std::endl;
         else { //  比如 if (3.1 - 3.1)，即 if (0.0) 的场合
             std::cout << "    xorpd %xmm1, %xmm1" << std::endl;
@@ -2016,7 +2110,7 @@ public:
         }
     }
 
-    void visit(If_AST_Node &node) override {
+    Value *visit(If_AST_Node &node) override {
         // 此处的label，也可以如龙书第2章2.8.4小节所述，作为If_AST_Node的属性，在其构造函数中确定。
         auto_label_no += 1;
         std::string auto_label = std::to_string(auto_label_no);
@@ -2032,9 +2126,10 @@ public:
         if (node.else_statement != nullptr)
             node.else_statement->accept(*this);
         std::cout << ".L.end." << auto_label << ":\n";
+        return nullptr;
     }
 
-    void visit(While_AST_Node &node) override {
+    Value *visit(While_AST_Node &node) override {
         auto_label_no += 1;
         std::string auto_label = std::to_string(auto_label_no);
         std::string previous_break_label = current_break_label;
@@ -2053,9 +2148,10 @@ public:
 
         current_break_label = previous_break_label;
         current_continue_label = previous_continue_label;
+        return nullptr;
     }
 
-    void visit(For_AST_Node &node) override {
+    Value *visit(For_AST_Node &node) override {
         auto_label_no += 1;
         std::string auto_label = std::to_string(auto_label_no);
         std::string previous_break_label = current_break_label;
@@ -2072,29 +2168,32 @@ public:
 
         current_break_label = previous_break_label;
         current_continue_label = previous_continue_label;
+        return nullptr;
     }
 
-    void visit(Break_AST_Node &node) override {
+    Value *visit(Break_AST_Node &node) override {
         std::cout << "    jmp " << current_break_label << std::endl;
+        return nullptr;
     }
 
-    void visit(Continue_AST_Node &node) override {
+    Value *visit(Continue_AST_Node &node) override {
         std::cout << "    jmp " << current_continue_label << std::endl;
+        return nullptr;
     }
 
-    void visit(Print_AST_Node &node) override {
+    Value *visit(Print_AST_Node &node) override {
         node.value->accept(*this);
         switch (node.value->baseType) {
-            case Type_float:
+            case Ty_float:
                 print_format_strings.emplace("printf_format_float", R"(    .string   "%f\n")");
                 std::cout << "    lea printf_format_float, %rdi\n";
                 break;
-            case Type_int:
+            case Ty_int:
                 print_format_strings.emplace("printf_format_int", R"(    .string   "%d\n")");
                 std::cout << "    lea printf_format_int, %rdi\n";
                 std::cout << "    mov %rax, %rsi\n";
                 break;
-            case Type_char:
+            case Ty_char:
                 print_format_strings.emplace("printf_format_char", R"(    .string   "%c\n")");
                 std::cout << "    lea printf_format_char, %rdi\n";
                 std::cout << "    mov %rax, %rsi\n";
@@ -2102,15 +2201,16 @@ public:
             default:
                 break;
         }
-        std::cout << "    call printf\n"; // 调用printf外部函数.
+        std::cout << "    call printf\n"; // 调用外部函数printf.
+        return nullptr;
     }
 
-    void visit(FunctionCall_AST_Node &node) override {
+    Value *visit(FunctionCall_AST_Node &node) override {
         int float_count = 0, others_count = 0;
         // 实参入栈.
         for (auto &argument: node.arguments) {
             argument->accept(*this);
-            if (argument->baseType == Type_float) {
+            if (argument->baseType == Ty_float) {
                 // push float.
                 std::cout << "    sub $8, %rsp" << std::endl;
                 std::cout << "    movsd %xmm0, (%rsp)" << std::endl;
@@ -2122,7 +2222,7 @@ public:
         }
         // 实参分发，将数值存入寄存器.
         for (int j = node.arguments.size() - 1; j >= 0; j--) {
-            if (node.arguments[j]->baseType == Type_float) {
+            if (node.arguments[j]->baseType == Ty_float) {
                 float_count = float_count - 1;
                 // pop float
                 std::cout << "    movsd (%rsp), %" << parameter_registers_float[float_count] << std::endl;
@@ -2135,13 +2235,15 @@ public:
 
         std::cout << "    mov $0, %rax\n";
         std::cout << "    call " << node.funcName << std::endl;
+        return nullptr;
     }
 
-    void visit(Parameter_AST_Node &node) override {
+    Value *visit(Parameter_AST_Node &node) override {
         node.accept(*this);
+        return nullptr;
     }
 
-    void visit(FunctionDeclaration_AST_Node &node) override {
+    Value *visit(FunctionDeclaration_AST_Node &node) override {
         // Prologue
         std::cout << "\n" << "    .text\n";
         std::cout << "    .global " << node.funcName << std::endl;
@@ -2156,7 +2258,7 @@ public:
         int i = 0, f = 0;
         for (auto &param: node.formalParams) {
             std::shared_ptr<Parameter_AST_Node> p = std::dynamic_pointer_cast<Parameter_AST_Node>(param);
-            if (param->type == Type_float)
+            if (param->type == Ty_float)
                 std::cout << "    movq %" << parameter_registers_float[f++] << ", " << p->symbol->offset << "(%rbp)\n";
             else std::cout << "    mov %" << parameter_registers[i++] << ", " << p->symbol->offset << "(%rbp)\n";
         }
@@ -2169,32 +2271,392 @@ public:
         std::cout << "    mov %rbp, %rsp\n";
         std::cout << "    pop %rbp\n";
         std::cout << "    ret\n";
+        return nullptr;
     }
 
-    void visit(Program_AST_Node &node) override {
-        // 只需要遍历函数List即可，全局变量的处理在语义分析阶段已经完成，故无需遍历全局变量List.
+    Value *visit(Program_AST_Node &node) override {
+        // 1. 遍历函数List，生成各个函数对应的汇编代码
         if (!node.funcDeclarationList.empty())
             for (auto &n: node.funcDeclarationList) n->accept(*this);
+
+        // 2. 对于全局变量，已经在语义分析阶段将其信息导入globals，
+        //    故无需遍历全局变量List，而只需根据globals，
+        //    将全局或静态变量对应的汇编代码放在最后即可
+        std::cout << "\n" << "    .data\n";
+        for (auto &gvar: globals) {
+            std::cout << gvar.name << ":\n";
+            if (gvar.type == Ty_float)
+                std::cout << "    .double " << gvar.initialValueLiteral << "\n";
+            else // if (gvar.type == Ty_int)
+                std::cout << "    .long " << gvar.initialValueLiteral << "\n";
+        }
+        return nullptr;
     }
 };
 
 void X86_CodeGenerator::X86_code_generate(AST_Node &tree) {
+
+    // 遍历AST
     tree.accept(*this);
 
-    // global and static variables.
-    std::cout << "\n" << "    .data\n";
-    for (auto &gvar: globals) {
-        std::cout << gvar.name << ":\n";
-        if (gvar.type == Type_float)
-            std::cout << "    .double " << gvar.initialValueLiteral << "\n";
-        else // if (gvar.type == Type_int)
-            std::cout << "    .long " << gvar.initialValueLiteral << "\n";
-    }
     // 若想调用printf打印，则在.data段的最后添加“格式控制字符串”.
-    for (auto & f : print_format_strings) {
+    for (auto &f: print_format_strings) {
         std::cout << f.first << ":\n";
         std::cout << f.second << std::endl;
     }
+}
+
+
+
+//===----------------------------------------------------------------------===//
+// llvm_IR_Code generator derived from Visitor
+//===----------------------------------------------------------------------===//
+
+
+class Scope {
+public:
+    std::vector<std::map<std::string, Value *>> inner;
+
+    // enter a new scope
+    void enter_new() {
+        std::map<std::string, Value *> mp = {};
+        inner.push_back(mp);
+    }
+
+    // exit a scope
+    void exit() {
+        inner.pop_back();
+    }
+
+    bool push(std::string &name, Value *val) {
+        auto result = inner[inner.size() - 1].insert({name, val});
+        return result.second;
+    }
+
+    Value *find(std::string &name) {
+        for (auto s = inner.rbegin(); s != inner.rend(); s++) {
+            auto iter = s->find(name);
+            if (iter != s->end()) {
+                return iter->second;
+            }
+        }
+
+        return nullptr;
+    }
+};
+
+static LLVMContext TheContext;
+static IRBuilder<> Builder(TheContext);
+static std::unique_ptr<Module> TheModule;
+// 即符号表
+Scope scope;
+
+void *LogErrorV(const char *Str) {
+    printf("Code generation error: \n%s\n", Str);
+    return nullptr;
+}
+
+class IR_CodeGenerator : public Visitor {
+
+public:
+    void IR_code_generate(AST_Node &tree);
+
+    Value *visit(NumLiteral_AST_Node &node) override {
+        switch (node.baseType) {
+            case Ty_int:
+                return ConstantInt::get(TheContext, APInt(32, std::stoi(node.literal)));
+            case Ty_bool:
+                return ConstantInt::get(TheContext, APInt(1, std::stoi(node.literal)));
+            case Ty_float:
+                return ConstantFP::get(TheContext, APFloat(std::stof(node.literal)));
+            default:
+                return nullptr;
+        }
+    }
+
+    Value *visit(Return_AST_Node &node) override {
+        if (node.expression == nullptr) {
+            return Builder.CreateRetVoid();
+        } else {
+            Value *val = node.expression->accept(*this);
+            return Builder.CreateRet(val);
+        }
+    }
+
+    Value *visit(Assignment_AST_Node &node) override {
+        Value *var = node.left->accept(*this);
+        Value *value = node.right->accept(*this);
+        return Builder.CreateStore(value, var);
+    }
+
+    Value *visit(BinaryOperator_AST_Node &node) override {
+        Value *L = node.left->accept(*this);
+        Value *R = node.right->accept(*this);
+        if (!L || !R) {
+            return nullptr;
+        }
+
+        auto lefttype = L->getType();
+        auto righttype = R->getType();
+
+        if (lefttype == righttype) {
+            if (lefttype == Type::getInt32Ty(TheContext)) {
+                if (node.op == TK_PLUS) {
+                    return Builder.CreateAdd(L, R, "addtmp");
+                } else if (node.op == TK_MINUS) {
+                    return Builder.CreateSub(L, R, "subtmp");
+                }
+            } else if (lefttype == Type::getFloatTy(TheContext)) {
+                if (node.op == TK_PLUS) {
+                    return Builder.CreateFAdd(L, R, "addtmp");
+                } else if (node.op == TK_MINUS) {
+                    return Builder.CreateFSub(L, R, "subtmp");
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    Value *visit(UnaryOperator_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(BaseType_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(SingleVariableDeclaration_AST_Node &node) override {
+        Type *type;
+        switch (node.baseType) {
+            case Ty_int:
+                type = Type::getInt32Ty(TheContext);
+                break;
+            case Ty_bool:
+                type = Type::getInt1Ty(TheContext);
+                break;
+            case Ty_float:
+                type = Type::getInt32Ty(TheContext);
+                break;
+            default:
+                type = nullptr;
+                break;
+        }
+        auto ldAlloc = Builder.CreateAlloca(type);
+        auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
+        scope.push(v->var_name, ldAlloc);
+        return nullptr;
+    }
+
+    Value *visit(VariableDeclarations_AST_Node &node) override {
+        if (!node.varDeclarations.empty())
+            for (auto &n: node.varDeclarations) n->accept(*this);
+        return nullptr;
+    }
+
+    Value *visit(Variable_AST_Node &node) override {
+        Value *var = scope.find(node.var_name);
+        return var;
+    }
+
+    Value *visit(Block_AST_Node &node) override {
+        // {} 需要进入scope
+        scope.enter_new();
+        for (auto &stmt: node.statements)
+            stmt->accept(*this);
+        // 结束时记得退出scope
+        scope.exit();
+        return nullptr;
+    }
+
+    Value *visit(If_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(While_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(For_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(Break_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(Continue_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(Print_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(FunctionCall_AST_Node &node) override {
+        return nullptr;
+    }
+
+    Value *visit(Parameter_AST_Node &node) override {
+        Value *pAlloc;
+        switch (node.baseType) {
+            case Ty_int:
+                pAlloc = Builder.CreateAlloca(Type::getInt32Ty(TheContext));
+                break;
+            case Ty_bool:
+                pAlloc = Builder.CreateAlloca(Type::getInt1Ty(TheContext));
+                break;
+            case Ty_float:
+                pAlloc = Builder.CreateAlloca(Type::getFloatTy(TheContext));
+                break;
+            default:
+                pAlloc = nullptr;
+                break;
+        }
+        auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.parameterVar);
+        scope.push(v->var_name, pAlloc);
+        return nullptr;
+    }
+
+    static Function *construc_function(FunctionDeclaration_AST_Node &node) {
+        // 返回值类型
+        Type *return_type;
+        switch (node.funcType->type) {
+            case Ty_int:
+                return_type = Type::getInt32Ty(TheContext);
+                break;
+            case Ty_bool:
+                return_type = Type::getInt1Ty(TheContext);
+                break;
+            case Ty_float:
+                return_type = Type::getFloatTy(TheContext);
+                break;
+            default:  // i.e., Ty_void
+                return_type = Type::getVoidTy(TheContext);
+        }
+
+        // 形参类型
+        std::vector<Type *> parameterTypes;
+        if (!node.formalParams.empty()) {
+            for (auto &each: node.formalParams) {
+                switch (each->type) {
+                    case Ty_int:
+                        parameterTypes.push_back(Type::getInt32Ty(TheContext));
+                        break;
+                    case Ty_bool:
+                        parameterTypes.push_back(Type::getInt1Ty(TheContext));
+                        break;
+                    case Ty_float:
+                        parameterTypes.push_back(Type::getFloatTy(TheContext));
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        // 构建函数
+        FunctionType *FunctionType = FunctionType::get(return_type, parameterTypes, false);
+        Function *F = Function::Create(FunctionType,
+                                       Function::ExternalLinkage,
+                                       node.funcName,
+                                       TheModule.get());
+        return F;
+    }
+
+    Value *visit(FunctionDeclaration_AST_Node &node) override {
+
+        Function *f = construc_function(node);
+        if (!f) {
+            std::string stringy = "Function '" + node.funcName + "' is not defined properly\n";
+            return (Function *) LogErrorV(stringy.c_str());
+        }
+
+        // for later function-call
+        scope.push(node.funcName, f); // into global scope
+
+        scope.enter_new();  // current function scope
+
+        BasicBlock *basicblock = BasicBlock::Create(TheContext, "entry", f);
+        Builder.SetInsertPoint(basicblock);
+
+        if (!node.formalParams.empty())
+            for (auto &each: node.formalParams)
+                each->accept(*this);
+
+        for (auto &argument: f->args()) {
+            IRBuilder<> Tmp(&f->getEntryBlock(), f->getEntryBlock().begin());
+            AllocaInst *Alloca = Tmp.CreateAlloca(argument.getType(), nullptr, argument.getName());
+            Builder.CreateStore(&argument, Alloca);
+        }
+
+        Value *returner = node.funcBlock->accept(*this);
+        verifyFunction(*f);
+
+        scope.exit();  // current function scope
+        return f;
+    }
+
+    Value *visit(Program_AST_Node &node) override {
+        // 1. 对于全局变量，已经在语义分析阶段将其信息导入globals，
+        //    故无需遍历全局变量List，而只需根据globals处理
+        scope.enter_new(); // global scope
+        for (auto &gvar: globals) {
+            switch (gvar.type) {
+                case Ty_int: {
+                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt32Ty(TheContext), false,
+                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
+                                                      ConstantInt::get(TheContext,
+                                                                       APInt(32, std::stoi(gvar.initialValueLiteral))));
+                    scope.push(gvar.name, gdAlloc);
+                    break;
+                }
+                case Ty_bool: {
+                    ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(TheContext));
+                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt1Ty(TheContext), false,
+                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
+                                                      ConstantInt::get(TheContext,
+                                                                       APInt(1, std::stoi(gvar.initialValueLiteral))));
+                    scope.push(gvar.name, gdAlloc);
+                    break;
+                }
+                case Ty_float: {
+                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getFloatTy(TheContext), false,
+                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
+                                                      ConstantFP::get(TheContext,
+                                                                      APFloat(std::stof(gvar.initialValueLiteral))));
+                    scope.push(gvar.name, gdAlloc);
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        // 2. 对于函数，逐一处理
+        if (!node.funcDeclarationList.empty())
+            for (auto &func: node.funcDeclarationList)
+                func->accept(*this);
+
+        scope.exit(); // global scope
+        return nullptr;
+    }
+};
+
+void IR_CodeGenerator::IR_code_generate(AST_Node &tree) {
+    // Prepare the module, which holds all the SSA code.
+    TheModule = std::make_unique<Module>("source.c", TheContext);
+
+    // 遍历AST，填充TheModule
+    tree.accept(*this);
+
+    auto Filename = "output.ll";
+    std::error_code EC;
+    raw_fd_ostream dest(Filename, EC, sys::fs::F_None);
+    if (EC) {
+        errs() << "Could not open file: " << EC.message();
+        return;
+    }
+    TheModule->print(dest, nullptr);
 }
 
 
@@ -2213,13 +2675,13 @@ int main(int argc, char *argv[]) {
          * */
         // for convenience, source code will be read into a string
         // ref: https://www.zhihu.com/question/426117879/answer/2618969836?utm_source=qq&utm_medium=social&utm_oi=867698515231522816
-        std::ostringstream out;  // this var is auxiliary
+        std::ostringstream out;         // 辅助流
         if (strcmp(argv[1], "-") == 0) {  // "-" is exactly the string in argv[1]
             out << std::cin.rdbuf();
         } else {   // argv[1] is the name of test file
-            std::ifstream fin(argv[1]);
-            out << fin.rdbuf();
-            fin.close();
+            std::ifstream fin(argv[1]); // 以流的形式打开源代码文件
+            out << fin.rdbuf();         // 将之注入out
+            fin.close();                // 关闭源代码文件
         }
         input_string = out.str(); // with the help of out, source code is read into a string
     } else {
@@ -2244,9 +2706,13 @@ int main(int argc, char *argv[]) {
     SemanticAnalyzer semantic_analyzer;
     semantic_analyzer.analyze(*tree);
 
-    // 代码生成.
+    // X86汇编代码生成.
     X86_CodeGenerator X86_code_generator;
     X86_code_generator.X86_code_generate(*tree);
+
+    // LLVM IR代码生成
+    IR_CodeGenerator IR_code_generator;
+    IR_code_generator.IR_code_generate(*tree);
 }
 
 
