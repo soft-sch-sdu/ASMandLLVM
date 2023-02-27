@@ -9,10 +9,12 @@ define i32 @foo(i32 %0) {
 entry:
   %1 = alloca i32, align 4
   store i32 %0, i32* %1, align 4
-  ret i32 13
+  %j = load i32, i32* %1, align 4
+  ret i32 %j
 }
 
 define i32 @main() {
 entry:
-  ret i32 23
+  %calltmp = call i32 @foo(i32 23)
+  ret i32 %calltmp
 }

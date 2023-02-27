@@ -1708,7 +1708,7 @@ public:
     Value *visit(Parameter_AST_Node &node) override {
         // 类型.
         node.parameterType->accept(*this);
-        node.type = node.parameterType->type;
+        node.type = node.baseType = node.parameterType->type;
         std::shared_ptr<BaseType_AST_Node> paramTypeNode = std::dynamic_pointer_cast<BaseType_AST_Node>(
                 node.parameterType);
 
@@ -2340,7 +2340,6 @@ public:
                 return iter->second;
             }
         }
-
         return nullptr;
     }
 };
@@ -2455,7 +2454,7 @@ public:
 
     Value *visit(Variable_AST_Node &node) override {
         Value *var = scope.find(node.var_name);
-        return var;
+        return Builder.CreateLoad(var, node.var_name);
     }
 
     Value *visit(Block_AST_Node &node) override {
@@ -2493,6 +2492,20 @@ public:
     }
 
     Value *visit(FunctionCall_AST_Node &node) override {
+//        auto fAlloc = scope.find(node.funcName);
+        Function *callerFunc = TheModule->getFunction(node.funcName);
+        if(callerFunc == nullptr){
+            exit(0);
+        }
+        else {
+            std::vector<Value *> funargs;
+            for(auto& expr : node.arguments) {
+                auto argValue = expr->accept(*this);
+                funargs.push_back(argValue);
+            }
+
+            return Builder.CreateCall(callerFunc, funargs, "calltmp");
+        }
         return nullptr;
     }
 
@@ -2583,11 +2596,34 @@ public:
             for (auto &each: node.formalParams)
                 each->accept(*this);
 
-        for (auto &argument: f->args()) {
-            IRBuilder<> Tmp(&f->getEntryBlock(), f->getEntryBlock().begin());
-            AllocaInst *Alloca = Tmp.CreateAlloca(argument.getType(), nullptr, argument.getName());
-            Builder.CreateStore(&argument, Alloca);
+//        for (auto &argument: f->args()) {
+//            IRBuilder<> Tmp(&f->getEntryBlock(), f->getEntryBlock().begin());
+//            AllocaInst *Alloca = Tmp.CreateAlloca(argument.getType(), nullptr, argument.getName());
+//            Builder.CreateStore(&argument, Alloca);
+//        }
+
+        // store parameters' value
+        std::vector<Value *> args_value;
+
+        for (auto arg = f->arg_begin(); arg != f->arg_end(); arg++){
+            args_value.push_back(arg);
         }
+
+        // assert node params size = args_value size
+        if(!node.formalParams.empty() && !args_value.empty()){
+            int i = 0;
+            for (auto& arg : node.formalParams){
+                auto p = std::dynamic_pointer_cast<Parameter_AST_Node>(arg);
+                auto pVar = std::dynamic_pointer_cast<Variable_AST_Node>(p->parameterVar);
+                auto pAlloc = scope.find(pVar->var_name);
+                if(pAlloc == nullptr){
+                    exit(0);
+                } else {
+                    Builder.CreateStore(args_value[i++], pAlloc);
+                }
+            }
+        }
+
 
         Value *returner = node.funcBlock->accept(*this);
         verifyFunction(*f);
