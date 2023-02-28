@@ -503,6 +503,7 @@ public:
     // map是基于红黑树的数据结构，也可以用基于哈希表的unordered_map
     std::map<std::string, std::shared_ptr<Symbol>> symbols;
     int level;
+    int child_no_count = 0;
     std::shared_ptr<ScopedSymbolTable> enclosing_scope;
     std::vector<std::shared_ptr<ScopedSymbolTable>> sub_scopes;
 
@@ -1586,6 +1587,8 @@ public:
         // 该属性值的计算属SDT的内容，还是属于语义分析的内容？
         if (varNode->type == Ty_array) varNode->baseType = basetypeNode->type;
         else varNode->type = varNode->baseType = basetypeNode->type;
+        node.baseType = varNode->type;
+
         std::vector<std::shared_ptr<Assignment_AST_Node>> initNodes;
         for (auto &init: node.inits)
             initNodes.push_back(std::dynamic_pointer_cast<Assignment_AST_Node>(init));
@@ -1647,8 +1650,21 @@ public:
     }
 
     Value *visit(Block_AST_Node &node) override {
+        // 创建block scope symbol_table.
+        std::map<std::string, std::shared_ptr<Symbol>> symbols;
+        auto scope = std::make_shared<ScopedSymbolTable>(std::move(symbols), 1, nullptr);
+        scope->level = currentScope->level + 1;
+        currentScope->child_no_count++;
+        scope->name = currentScope->name + "." + std::to_string(currentScope->child_no_count); // todo: 名字如何取？
+        scope->category = "block";
+        scope->enclosing_scope = currentScope;
+        currentScope->sub_scopes.push_back(scope);
+        currentScope = scope;
+
         if (!node.statements.empty())
             for (auto &n: node.statements) n->accept(*this);
+
+        currentScope = currentScope->enclosing_scope;
         return nullptr;
     }
 
@@ -1678,7 +1694,6 @@ public:
 
         if (node.increment != nullptr)
             node.increment->accept(*this);
-
 
         node.statement->accept(*this);
         return nullptr;
@@ -1749,7 +1764,8 @@ public:
             eachParam->accept(*this);
 
         // visit函数体.
-        node.funcBlock->accept(*this);
+        auto fun_block = std::dynamic_pointer_cast<Block_AST_Node>(node.funcBlock);
+        for (auto &stmt : fun_block->statements) stmt->accept(*this);
 
         node.offset = offsetSum; // 此值即代码生成阶段的stack_size.
         return nullptr;
@@ -2383,7 +2399,11 @@ public:
     }
 
     Value *visit(Assignment_AST_Node &node) override {
-        Value *var = node.left->accept(*this);
+        /* 赋值语句的左值是地址，获取该地址。该地址在访问SingleVariableDeclaration_AST_Node时，
+         * 已经分配，并记录在符号表，即scope.                 */
+        auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.left);
+        Value *var = scope.find(v->var_name);
+
         Value *value = node.right->accept(*this);
         return Builder.CreateStore(value, var);
     }
@@ -2425,24 +2445,36 @@ public:
     }
 
     Value *visit(SingleVariableDeclaration_AST_Node &node) override {
+        Function *func = Builder.GetInsertBlock()->getParent();
         Type *type;
+        Value *value;
         switch (node.baseType) {
             case Ty_int:
                 type = Type::getInt32Ty(TheContext);
+                value = ConstantInt::get(TheContext, APInt(32,0));
                 break;
             case Ty_bool:
                 type = Type::getInt1Ty(TheContext);
+                value = ConstantInt::get(TheContext, APInt(1,0));
                 break;
             case Ty_float:
-                type = Type::getInt32Ty(TheContext);
+                type = Type::getFloatTy(TheContext);
+                value = ConstantFP::get(TheContext, APFloat(0.0));
                 break;
             default:
                 type = nullptr;
                 break;
         }
-        auto ldAlloc = Builder.CreateAlloca(type);
+
+        IRBuilder<> Tmp(&func->getEntryBlock(), func->getEntryBlock().begin());
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
-        scope.push(v->var_name, ldAlloc);
+        AllocaInst *allocation = Tmp.CreateAlloca(type, nullptr, v->var_name);
+
+        scope.push(v->var_name, allocation);
+
+        for (auto &each : node.inits)
+            each->accept(*this);
+
         return nullptr;
     }
 
@@ -2458,12 +2490,10 @@ public:
     }
 
     Value *visit(Block_AST_Node &node) override {
-        // {} 需要进入scope
-        scope.enter_new();
+        scope.enter_new(); //  进入{}scope
         for (auto &stmt: node.statements)
             stmt->accept(*this);
-        // 结束时记得退出scope
-        scope.exit();
+        scope.exit(); // 退出 {} scope
         return nullptr;
     }
 
@@ -2587,7 +2617,7 @@ public:
         // for later function-call
         scope.push(node.funcName, f); // into global scope
 
-        scope.enter_new();  // current function scope
+        scope.enter_new();  // enter current function scope
 
         BasicBlock *basicblock = BasicBlock::Create(TheContext, "entry", f);
         Builder.SetInsertPoint(basicblock);
@@ -2628,14 +2658,14 @@ public:
         Value *returner = node.funcBlock->accept(*this);
         verifyFunction(*f);
 
-        scope.exit();  // current function scope
+        scope.exit();  // exist current function scope
         return f;
     }
 
     Value *visit(Program_AST_Node &node) override {
         // 1. 对于全局变量，已经在语义分析阶段将其信息导入globals，
         //    故无需遍历全局变量List，而只需根据globals处理
-        scope.enter_new(); // global scope
+        scope.enter_new(); // enter global scope
         for (auto &gvar: globals) {
             switch (gvar.type) {
                 case Ty_int: {
@@ -2673,7 +2703,7 @@ public:
             for (auto &func: node.funcDeclarationList)
                 func->accept(*this);
 
-        scope.exit(); // global scope
+        scope.exit(); // exit global scope
         return nullptr;
     }
 };
