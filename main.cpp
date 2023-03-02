@@ -2422,8 +2422,43 @@ public:
             if (lefttype == Type::getInt32Ty(TheContext)) {
                 if (node.op == TK_PLUS) {
                     return Builder.CreateAdd(L, R, "addtmp");
-                } else if (node.op == TK_MINUS) {
+                }
+                else if (node.op == TK_MINUS) {
                     return Builder.CreateSub(L, R, "subtmp");
+                }
+                else if(node.op == TK_MULorDEREF){
+                    return Builder.CreateMul(L, R, "multmp");
+                }
+                else if(node.op == TK_DIV){
+                    return Builder.CreateSDiv(L, R, "dictmp");
+                }
+                else if(node.op == TK_LT){
+                    L = Builder.CreateICmpULT(L, R, "cmptemp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_GT){
+                    L = Builder.CreateICmpUGT(L, R, "cmptemp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_LE){
+                    L = Builder.CreateICmpULE(L, R, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_GE){
+                    L = Builder.CreateICmpUGE(L, R, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_EQ){
+                    Value* LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
+                    Value* RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
+                    L = Builder.CreateFCmpUEQ(LF, RF, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_NE){
+                    Value* LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
+                    Value* RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
+                    L = Builder.CreateFCmpUNE(LF, RF, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
                 }
             } else if (lefttype == Type::getFloatTy(TheContext)) {
                 if (node.op == TK_PLUS) {
@@ -2431,7 +2466,38 @@ public:
                 } else if (node.op == TK_MINUS) {
                     return Builder.CreateFSub(L, R, "subtmp");
                 }
+                else if(node.op == TK_MULorDEREF){
+                    return Builder.CreateFMul(L, R, "multmp");
+                }
+                else if(node.op == TK_DIV){
+                    return Builder.CreateFDiv(L, R, "dictmp");
+                }
+                else if(node.op == TK_LT){
+                    L = Builder.CreateFCmpULT(L, R, "cmptemp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_GT){
+                    L = Builder.CreateFCmpUGT(L, R, "cmptemp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_LE){
+                    L = Builder.CreateFCmpULE(L, R, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_GE){
+                    L = Builder.CreateFCmpUGE(L, R, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_EQ){
+                    L = Builder.CreateFCmpUEQ(L, R, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
+                else if(node.op == TK_NE){
+                    L = Builder.CreateFCmpUNE(L, R, "cmptmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                }
             }
+
         }
         return nullptr;
     }
