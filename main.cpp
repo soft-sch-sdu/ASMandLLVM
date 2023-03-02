@@ -2564,6 +2564,36 @@ public:
     }
 
     Value *visit(While_AST_Node &node) override {
+        Function *func = Builder.GetInsertBlock()->getParent();
+        BasicBlock *condition = BasicBlock::Create(TheContext, "condition", func);
+        BasicBlock *loopBody = BasicBlock::Create(TheContext, "while loop body", func);
+        BasicBlock *afterLoop = BasicBlock::Create(TheContext, "after loop", func);
+
+        if(Builder.GetInsertBlock()->getTerminator() == nullptr)
+            Builder.CreateBr(condition);
+        Builder.SetInsertPoint(condition);
+
+        // 计算condition的值，可能是各种类型的值.
+        Value *condV = node.condition->accept(*this);
+        if (!condV)
+            return nullptr;
+        // 通过与0或0.0比较，确认将该值转换为bool类型的值.
+        if (condV->getType() == Type::getInt1Ty(TheContext)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "ifcondition");
+        } else if(condV->getType() == Type::getInt32Ty(TheContext)){
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "ifcondition");
+        } else {
+            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "ifcondition");
+        }
+
+        Builder.CreateCondBr(condV, loopBody, afterLoop);
+        Builder.SetInsertPoint(loopBody);
+        node.statement->accept(*this);
+
+        if(Builder.GetInsertBlock()->getTerminator() == nullptr)
+            Builder.CreateBr(condition);
+        Builder.SetInsertPoint(afterLoop);
+
         return nullptr;
     }
 
