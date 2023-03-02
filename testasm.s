@@ -1,3 +1,4 @@
+
     .text
     .global foo
 foo:
@@ -16,14 +17,16 @@ foo:
     movq %rax, %xmm0
     pop %rdi
     movsd %xmm0, (%rdi)
-    lea -32(%rbp), %rax
-    push %rax
-    mov $9, %rax
-    pop %rdi
-    mov %rax, (%rdi)
-    lea -32(%rbp), %rax
+    lea -8(%rbp), %rax
+    mov (%rax), %rax
+    cmp $0, %rax
+    je  .L.else.1
+    lea -8(%rbp), %rax
     mov (%rax), %rax
     jmp L.foo.return
+    jmp .L.end.1
+.L.else.1:
+.L.end.1:
 L.foo.return:
     mov %rbp, %rsp
     pop %rbp

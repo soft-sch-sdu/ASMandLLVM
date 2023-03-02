@@ -1655,7 +1655,7 @@ public:
         auto scope = std::make_shared<ScopedSymbolTable>(std::move(symbols), 1, nullptr);
         scope->level = currentScope->level + 1;
         currentScope->child_no_count++;
-        scope->name = currentScope->name + "." + std::to_string(currentScope->child_no_count); // todo: 名字如何取？
+        scope->name = currentScope->name + "." + std::to_string(currentScope->child_no_count);
         scope->category = "block";
         scope->enclosing_scope = currentScope;
         currentScope->sub_scopes.push_back(scope);
@@ -2498,6 +2498,68 @@ public:
     }
 
     Value *visit(If_AST_Node &node) override {
+        // 计算condition的值，可能是各种类型的值.
+        Value *condV = node.condition->accept(*this);
+        if (!condV)
+            return nullptr;
+        // 通过与0或0.0比较，确认将该值转换为bool类型的值.
+        if (condV->getType() == Type::getInt1Ty(TheContext)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "ifcondition");
+        } else if(condV->getType() == Type::getInt32Ty(TheContext)){
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "ifcondition");
+        } else {
+            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "ifcondition");
+        }
+
+        Function *TheFunction = Builder.GetInsertBlock()->getParent();
+
+        if(node.else_statement != nullptr){ // 有else
+            auto trueBB = BasicBlock::Create(TheContext, "trueBranch", TheFunction);
+            auto falseBB = BasicBlock::Create(TheContext, "falseBranch", TheFunction);
+            // 创建after_ifBB基本块时，无需参数TheFunction，
+            // 因为尚不确定是否在上面两个基本块中是否有return指令.
+            // 若飞得要加上参数TheFunction，则与后面的after_ifBB->insertInto(TheFunction)冲突
+            // 程序出现异常.
+            auto after_ifBB = BasicBlock::Create(TheContext, "after-if");
+            Builder.CreateCondBr(condV, trueBB, falseBB);
+
+            // trueBB
+            Builder.SetInsertPoint(trueBB);
+            node.then_statement->accept(*this); // 插入trueBB基本块的代码.
+            int insertedFlag = 0;
+            if(Builder.GetInsertBlock()->getTerminator() == nullptr){ // not returned inside the block
+                after_ifBB->insertInto(TheFunction); // 确定插入after_ifBB.
+                insertedFlag = 1;                    // 设置标志，说明已确定插入
+                Builder.CreateBr(after_ifBB);        // 跳到after_ifBB基本块
+            }
+
+            // falseBB
+            Builder.SetInsertPoint(falseBB);
+            node.else_statement->accept(*this); // 插入falseBB基本块的代码.
+
+            if(Builder.GetInsertBlock()->getTerminator() == nullptr){ // not returned inside the block
+                if (!insertedFlag){     // 若尚未决定是否插入after_ifBB.
+                    after_ifBB->insertInto(TheFunction); // 确定插入after_ifBB.
+                    insertedFlag = 1;                    // 设置标志，说明已确定插入.
+                }
+                Builder.CreateBr(after_ifBB); // 跳到after_ifBB基本块
+            }
+            // 在这里插入after_ifBB基本块代码.
+            if(insertedFlag) Builder.SetInsertPoint(after_ifBB);
+        }
+        else{  // 没有else部分
+            auto trueBranch = BasicBlock::Create(TheContext, "trueBranch", TheFunction);
+            auto after_ifBB = BasicBlock::Create(TheContext, "after-if", TheFunction);
+            Builder.CreateCondBr(condV, trueBranch, after_ifBB);
+
+            // trueBB
+            Builder.SetInsertPoint(trueBranch);
+            node.then_statement->accept(*this);
+
+            // after_ifBB
+            if(Builder.GetInsertBlock()->getTerminator() == nullptr) Builder.CreateBr(after_ifBB); // not returned inside the block
+            Builder.SetInsertPoint(after_ifBB);
+        }
         return nullptr;
     }
 
@@ -2522,7 +2584,6 @@ public:
     }
 
     Value *visit(FunctionCall_AST_Node &node) override {
-//        auto fAlloc = scope.find(node.funcName);
         Function *callerFunc = TheModule->getFunction(node.funcName);
         if(callerFunc == nullptr){
             exit(0);
@@ -2598,7 +2659,7 @@ public:
         }
 
         // 构建函数
-        FunctionType *FunctionType = FunctionType::get(return_type, parameterTypes, false);
+        FunctionType *FunctionType = FunctionType::get(return_type, parameterTypes, false/* doesn't have variadic args */);
         Function *F = Function::Create(FunctionType,
                                        Function::ExternalLinkage,
                                        node.funcName,
@@ -2625,12 +2686,6 @@ public:
         if (!node.formalParams.empty())
             for (auto &each: node.formalParams)
                 each->accept(*this);
-
-//        for (auto &argument: f->args()) {
-//            IRBuilder<> Tmp(&f->getEntryBlock(), f->getEntryBlock().begin());
-//            AllocaInst *Alloca = Tmp.CreateAlloca(argument.getType(), nullptr, argument.getName());
-//            Builder.CreateStore(&argument, Alloca);
-//        }
 
         // store parameters' value
         std::vector<Value *> args_value;
