@@ -10,10 +10,10 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
-
 
 using namespace llvm;
 using namespace llvm::sys;
@@ -208,9 +208,11 @@ TOKEN Lexer::getNextToken() {
                     CurrentChar = getChar();
                 }
             }
-        } else {
-            print_line(lineNo, columnNo - 3, "missing '*' or '/'");
-            exit(1);
+        } else {                                      // 是除运算，后面将做此解析
+            put_backChar();
+            put_backChar();
+            CurrentChar = getChar();
+            break;
         }
 
         // 忽略注释后的空白符.
@@ -1476,6 +1478,7 @@ std::shared_ptr<AST_Node> Parser::program() {
  * mul_div  :=  unary ("*" unary | "/" unary)*
  * unary  :=  ("+" | "-" | "!") unary | primary
  * primary  :=  num_literal | "(" expression ")" | identifier func_args? | identifier "[" expression "]"
+ * func_args = "(" (expression ("," expression)*)? ")"
  *
 ********************/
 std::shared_ptr<AST_Node> Parser::parse() {
@@ -2532,6 +2535,8 @@ public:
                 break;
         }
 
+//        auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
+//        AllocaInst *allocation = Builder.CreateAlloca(type, nullptr, v->var_name);
         IRBuilder<> Tmp(&func->getEntryBlock(), func->getEntryBlock().begin());
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
         AllocaInst *allocation = Tmp.CreateAlloca(type, nullptr, v->var_name);
@@ -2552,7 +2557,23 @@ public:
 
     Value *visit(Variable_AST_Node &node) override {
         Value *var = scope.find(node.var_name);
-        return Builder.CreateLoad(var, node.var_name);
+        Type *type;
+        switch (node.baseType) {
+            case Ty_int:
+                type = Type::getInt32Ty(TheContext);
+                break;
+            case Ty_bool:
+                type = Type::getInt1Ty(TheContext);
+                break;
+            case Ty_float:
+                type = Type::getFloatTy(TheContext);
+                break;
+            default:
+                type = nullptr;
+                break;
+        }
+        return Builder.CreateLoad(type, var, node.var_name);
+//        return Builder.CreateLoad(var, node.var_name);
     }
 
     Value *visit(Block_AST_Node &node) override {
@@ -2566,8 +2587,7 @@ public:
     Value *visit(If_AST_Node &node) override {
         // 计算condition的值，可能是各种类型的值.
         Value *condV = node.condition->accept(*this);
-        if (!condV)
-            return nullptr;
+        if (!condV) return nullptr;
         // 通过与0或0.0比较，确认将该值转换为bool类型的值.
         if (condV->getType() == Type::getInt1Ty(TheContext)) {
             condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "ifcondition");
@@ -2580,11 +2600,11 @@ public:
         Function *TheFunction = Builder.GetInsertBlock()->getParent();
 
         if(node.else_statement != nullptr){ // 有else
-            auto trueBB = BasicBlock::Create(TheContext, "trueBranch", TheFunction);
-            auto falseBB = BasicBlock::Create(TheContext, "falseBranch", TheFunction);
+            auto trueBB = BasicBlock::Create(TheContext, "if.then", TheFunction);
+            auto falseBB = BasicBlock::Create(TheContext, "if.else", TheFunction);
             // 创建after_ifBB基本块时，无需参数TheFunction，
-            // 因为尚不确定是否在上面两个基本块中是否有return指令.
-            // 若飞得要加上参数TheFunction，则与后面的after_ifBB->insertInto(TheFunction)冲突
+            // 因为尚不确定在上面两个基本块中是否有return指令.
+            // 若任性加上参数TheFunction，则与后面的after_ifBB->insertInto(TheFunction)冲突
             // 程序出现异常.
             auto after_ifBB = BasicBlock::Create(TheContext, "after-if");
             Builder.CreateCondBr(condV, trueBB, falseBB);
@@ -2602,7 +2622,6 @@ public:
             // falseBB
             Builder.SetInsertPoint(falseBB);
             node.else_statement->accept(*this); // 插入falseBB基本块的代码.
-
             if(Builder.GetInsertBlock()->getTerminator() == nullptr){ // not returned inside the block
                 if (!insertedFlag){     // 若尚未决定是否插入after_ifBB.
                     after_ifBB->insertInto(TheFunction); // 确定插入after_ifBB.
@@ -2631,34 +2650,38 @@ public:
 
     Value *visit(While_AST_Node &node) override {
         Function *func = Builder.GetInsertBlock()->getParent();
-        BasicBlock *condition = BasicBlock::Create(TheContext, "condition", func);
-        BasicBlock *loopBody = BasicBlock::Create(TheContext, "while loop body", func);
-        BasicBlock *afterLoop = BasicBlock::Create(TheContext, "after loop", func);
+        BasicBlock *condition = BasicBlock::Create(TheContext, "while.condition", func);
+        BasicBlock *whileBody = BasicBlock::Create(TheContext, "while.body", func);
+        BasicBlock *afterWhile = BasicBlock::Create(TheContext, "after-while", func);
 
         if(Builder.GetInsertBlock()->getTerminator() == nullptr)
             Builder.CreateBr(condition);
-        Builder.SetInsertPoint(condition);
 
-        // 计算condition的值，可能是各种类型的值.
+        // Prepare to emit the body of while
+        Builder.SetInsertPoint(condition);
+        // Emit the code to compute the value of condition.
         Value *condV = node.condition->accept(*this);
         if (!condV)
             return nullptr;
-        // 通过与0或0.0比较，确认将该值转换为bool类型的值.
+        // condition的值可能是各种类型的值，通过与0或0.0比较，确认将其转换为bool类型的值.
         if (condV->getType() == Type::getInt1Ty(TheContext)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "ifcondition");
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "whilecondition");
         } else if(condV->getType() == Type::getInt32Ty(TheContext)){
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "ifcondition");
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "whilecondition");
         } else {
-            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "ifcondition");
+            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "whilecondition");
         }
+        Builder.CreateCondBr(condV, whileBody, afterWhile);
 
-        Builder.CreateCondBr(condV, loopBody, afterLoop);
-        Builder.SetInsertPoint(loopBody);
+        // Prepare to emit the body of while
+        Builder.SetInsertPoint(whileBody);
+        // Emit the body of
         node.statement->accept(*this);
-
         if(Builder.GetInsertBlock()->getTerminator() == nullptr)
             Builder.CreateBr(condition);
-        Builder.SetInsertPoint(afterLoop);
+
+        // Prepare to emit the code after while
+        Builder.SetInsertPoint(afterWhile);
 
         return nullptr;
     }
@@ -2717,7 +2740,8 @@ public:
         return nullptr;
     }
 
-    static Function *construc_function(FunctionDeclaration_AST_Node &node) {
+    // helper function: construct_function
+    static Function *construct_function(FunctionDeclaration_AST_Node &node) {
         // 返回值类型
         Type *return_type;
         switch (node.funcType->type) {
@@ -2754,7 +2778,7 @@ public:
             }
         }
 
-        // 构建函数
+        // 构建函数头（不含函数体）
         FunctionType *FunctionType = FunctionType::get(return_type, parameterTypes, false/* doesn't have variadic args */);
         Function *F = Function::Create(FunctionType,
                                        Function::ExternalLinkage,
@@ -2765,7 +2789,8 @@ public:
 
     Value *visit(FunctionDeclaration_AST_Node &node) override {
 
-        Function *f = construc_function(node);
+        // 构建函数头
+        Function *f = construct_function(node); // call helper function: construct_function
         if (!f) {
             std::string stringy = "Function '" + node.funcName + "' is not defined properly\n";
             return (Function *) LogErrorV(stringy.c_str());
@@ -2774,24 +2799,23 @@ public:
         // for later function-call
         scope.push(node.funcName, f); // into global scope
 
+        // 准备构建函数体
         scope.enter_new();  // enter current function scope
 
         BasicBlock *basicblock = BasicBlock::Create(TheContext, "entry", f);
         Builder.SetInsertPoint(basicblock);
 
+        // 在函数栈帧为各个参数开辟空间
         if (!node.formalParams.empty())
             for (auto &each: node.formalParams)
                 each->accept(*this);
 
-        // store parameters' value
+        // 存储caller提供的参数取值
         std::vector<Value *> args_value;
-
         for (auto arg = f->arg_begin(); arg != f->arg_end(); arg++){
             args_value.push_back(arg);
         }
-
-        // assert node params size = args_value size
-        if(!node.formalParams.empty() && !args_value.empty()){
+        if(!node.formalParams.empty() && !args_value.empty()){ // assert node params size = args_value size
             int i = 0;
             for (auto& arg : node.formalParams){
                 auto p = std::dynamic_pointer_cast<Parameter_AST_Node>(arg);
@@ -2807,6 +2831,7 @@ public:
 
 
         Value *returner = node.funcBlock->accept(*this);
+        // 注意到这里用了llvm::verifyFunction, 它的作用是检查我们创建的函数是否正确，确保它是符合LLVM IR规范的。
         verifyFunction(*f);
 
         scope.exit();  // exist current function scope
@@ -2868,7 +2893,7 @@ void IR_CodeGenerator::IR_code_generate(AST_Node &tree) {
 
     auto Filename = "output.ll";
     std::error_code EC;
-    raw_fd_ostream dest(Filename, EC, sys::fs::F_None);
+    raw_fd_ostream dest(Filename, EC, sys::fs::OF_None);
     if (EC) {
         errs() << "Could not open file: " << EC.message();
         return;
@@ -2930,6 +2955,8 @@ int main(int argc, char *argv[]) {
     // LLVM IR代码生成
     IR_CodeGenerator IR_code_generator;
     IR_code_generator.IR_code_generate(*tree);
+
+    return 0;
 }
 
 
