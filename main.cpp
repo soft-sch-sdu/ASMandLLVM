@@ -10,7 +10,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
@@ -51,12 +50,13 @@ Ty type_returned_of_current_function;
 
 // 字符流，是Lexer的输入. main()函数负责把源代码读入input_string.
 static std::string input_string;
+
 static std::string current_break_label;
 static std::string current_continue_label;
 static std::map<std::string, std::string> print_format_strings; //for assembly code
 
 // 编译过程中，将错误信息打印出来
-static void print_line(int line_no, int column_no, const std::string &msg) {
+static void report_error(int line_no, int column_no, const std::string &msg) {
     std::stringstream input_string_stream(input_string);
     std::string line_str;
 
@@ -69,6 +69,9 @@ static void print_line(int line_no, int column_no, const std::string &msg) {
     fprintf(stderr, "^ %s\n", msg.c_str());
 }
 
+static void report_error(const std::string &msg) {
+    fprintf(stderr, "\nerror: %s\n", msg.c_str());
+}
 
 //===----------------------------------------------------------------------===//
 // Lexer
@@ -92,6 +95,7 @@ typedef enum TOKEN_TYPE {
     TK_IF,                           // if
     TK_ELSE,                         // else
     TK_WHILE,                        // while
+    TK_DO,                           // do
     TK_FOR,                          // for
     TK_BREAK,                        // break
     TK_CONTINUE,                     // continue
@@ -187,7 +191,7 @@ TOKEN Lexer::getNextToken() {
                 continue;
         } else if (CurrentChar == '*') {              // 是块注释
             if ((CurrentChar = getChar()) == '/') {
-                print_line(lineNo, columnNo - 2, "missing '*' before '/'");
+                report_error(lineNo, columnNo - 2, "missing '*' before '/'");
                 exit(1);
             }
             while (CurrentChar != '/') {
@@ -201,7 +205,7 @@ TOKEN Lexer::getNextToken() {
                 put_backChar();
                 put_backChar();
                 if ((CurrentChar = getChar()) != '*') {
-                    print_line(lineNo, columnNo - 2, "missing '*' before '/'");
+                    report_error(lineNo, columnNo - 2, "missing '*' before '/'");
                     exit(1);
                 } else {
                     getChar();
@@ -286,6 +290,8 @@ TOKEN Lexer::getNextToken() {
             return TOKEN{TK_ELSE, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "while")
             return TOKEN{TK_WHILE, IdentifierString, lineNo, columnNo};
+        if (IdentifierString == "do")
+            return TOKEN{TK_DO, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "for")
             return TOKEN{TK_FOR, IdentifierString, lineNo, columnNo};
         if (IdentifierString == "break")
@@ -405,7 +411,7 @@ TOKEN Lexer::getNextToken() {
         }
         case '\'': {// char character ref. https://github.com/rui314/chibicc/blob/aa0accc75e9358d313fef0a6d4005103e2ce25f5/tokenize.c
             if ((CurrentChar = getChar()) == '\0')
-                print_line(lineNo, columnNo, "unclosed char literal");
+                report_error(lineNo, columnNo, "unclosed char literal");
             char c;
             if (CurrentChar == '\\') {
                 CurrentChar = getChar();
@@ -437,7 +443,7 @@ TOKEN Lexer::getNextToken() {
             } else c = CurrentChar;
 
             if ((CurrentChar = getChar()) != '\'')
-                print_line(lineNo, columnNo, "unclosed char literal");
+                report_error(lineNo, columnNo, "unclosed char literal");
             std::string s(1, c);
             return TOKEN{TK_CHAR_LITERAL, s, lineNo, columnNo};
         }
@@ -558,6 +564,8 @@ class If_AST_Node;
 
 class While_AST_Node;
 
+class DoWhile_AST_Node;
+
 class For_AST_Node;
 
 class Break_AST_Node;
@@ -600,6 +608,8 @@ public:
     virtual Value *visit(If_AST_Node &node) = 0;
 
     virtual Value *visit(While_AST_Node &node) = 0;
+
+    virtual Value *visit(DoWhile_AST_Node &node) = 0;
 
     virtual Value *visit(For_AST_Node &node) = 0;
 
@@ -710,6 +720,20 @@ public:
 
     While_AST_Node(std::shared_ptr<AST_Node> con, std::shared_ptr<AST_Node> stmt)
             : condition(std::move(con)), statement(std::move(stmt)) {}
+
+    Value *accept(Visitor &v) override {
+        return v.visit(*this);
+    }
+};
+
+/// do-while语句对应的结点
+class DoWhile_AST_Node : public AST_Node {
+public:
+    std::shared_ptr<AST_Node> statement;
+    std::shared_ptr<AST_Node> condition;
+
+    DoWhile_AST_Node(std::shared_ptr<AST_Node> stmt, std::shared_ptr<AST_Node> con)
+            : statement(std::move(stmt)), condition(std::move(con)) {}
 
     Value *accept(Visitor &v) override {
         return v.visit(*this);
@@ -1249,6 +1273,7 @@ std::shared_ptr<AST_Node> Parser::variable_declaration() {
 //                   | "return" expression-statement
 //                   | "if" "(" expression ")" statement ("else" statement)?
 //                   | "while" "(" expression ")" statement
+//                   | "do" statement "while" "(" expression ")" ";"
 //                   | for" "(" expression? ";" expression ";" expression? ")" statement
 //                   | "break" ";"
 //                   | "continue" ";"
@@ -1300,6 +1325,22 @@ std::shared_ptr<AST_Node> Parser::statement() {
         }
         stmt = statement();
         return std::make_shared<While_AST_Node>(condition, stmt);
+    }
+
+    // "do" statement "while" "(" expression ")" ";"
+    if (CurrentToken.type == TK_DO) {
+        eatCurrentToken(); // eat "do"
+        std::shared_ptr<AST_Node> stmt, condition;
+        stmt = statement();
+        if (CurrentToken.type == TK_WHILE) {
+            eatCurrentToken(); // eat "while"
+            eatCurrentToken(); // eat "("
+            condition = expression();
+            eatCurrentToken(); // eat ")"
+            eatCurrentToken(); // eat ";"
+        }
+
+        return std::make_shared<DoWhile_AST_Node>(stmt, condition);
     }
 
     // "for" "(" expression? ";" expression ";" expression? ")" statement
@@ -1458,13 +1499,17 @@ std::shared_ptr<AST_Node> Parser::program() {
  * formal_parameters  :=  formal_parameter ("," formal_parameter)*
  * formal_parameter  :=  type_specification identifier
  * block  :=  "{" statement* "}"
- * statement  :=  variable_declaration
- *                  | expression_statement
- *                  | "return" expression-statement
- *                  | block
- *                  | "if" "(" expression ")" statement ("else" statement)?
- *                  | "while" "(" expression ")" statement
- *                  | "break" ";"
+ * statement  := expression_statement
+ *                   | block
+ *                   | variable_declaration
+ *                   | "return" expression-statement
+ *                   | "if" "(" expression ")" statement ("else" statement)?
+ *                   | "while" "(" expression ")" statement
+ *                   | "do" statement "while" "(" expression ")" ";"
+ *                   | for" "(" expression? ";" expression ";" expression? ")" statement
+ *                   | "break" ";"
+ *                   | "continue" ";"
+ *                   | "print" "(" expression ")" ";"
  * variable_declaration	 :=  type_specification declarator ("=" expression)? ("," declarator ("=" expression)?)* ";"
  *                         | type_specification declarator ("=" "{" (expression)? ("," expression)* "}")? ("," declarator ("=" expression)?)* ";"
  * type_specification  :=  "int" | "float" | "bool" | "void" | "char"
@@ -1476,7 +1521,7 @@ std::shared_ptr<AST_Node> Parser::program() {
  * relational  :=  add_sub ("<" add_sub | "<=" add_sub | ">" add_sub | ">=" add_sub)*
  * add_sub  :=  mul_div ("+" mul_div | "-" mul_div)*
  * mul_div  :=  unary ("*" unary | "/" unary)*
- * unary  :=  ("+" | "-" | "!") unary | primary
+ * unary :=	(“+” | “-” | “!” | “*” | “&”) unary | primary
  * primary  :=  num_literal | "(" expression ")" | identifier func_args? | identifier "[" expression "]"
  * func_args = "(" (expression ("," expression)*)? ")"
  *
@@ -1686,6 +1731,15 @@ public:
             node.condition->accept(*this);
         if (node.statement != nullptr)
             node.statement->accept(*this);
+        return nullptr;
+    }
+
+
+    Value *visit(DoWhile_AST_Node &node) override {
+        if (node.statement != nullptr)
+            node.statement->accept(*this);
+        if (node.condition != nullptr)
+            node.condition->accept(*this);
         return nullptr;
     }
 
@@ -2170,6 +2224,21 @@ public:
         return nullptr;
     }
 
+    Value *visit(DoWhile_AST_Node &node) override {
+        auto_label_no += 1;
+        std::string auto_label = std::to_string(auto_label_no);
+
+        std::cout << ".L.do." << auto_label << ":\n";
+        node.statement->accept(*this);
+
+        node.condition->accept(*this);
+        compare_zero(node.condition);
+        std::cout << "    je  .L.end." << auto_label << std::endl;
+        std::cout << "    jmp  .L.do." << auto_label << std::endl;
+        std::cout << ".L.end." << auto_label << ":\n";
+        return nullptr;
+    }
+
     Value *visit(For_AST_Node &node) override {
         auto_label_no += 1;
         std::string auto_label = std::to_string(auto_label_no);
@@ -2301,7 +2370,7 @@ public:
         // 2. 对于全局变量，已经在语义分析阶段将其信息导入globals，
         //    故无需遍历全局变量List，而只需根据globals，
         //    将全局或静态变量对应的汇编代码放在最后即可
-        std::cout << "\n" << "    .data\n";
+        if (!globals.empty()) std::cout << "\n" << "    .data\n";
         for (auto &gvar: globals) {
             std::cout << gvar.name << ":\n";
             if (gvar.type == Ty_float)
@@ -2506,6 +2575,21 @@ public:
     }
 
     Value *visit(UnaryOperator_AST_Node &node) override {
+        Value *rightValue = node.right->accept(*this);
+        if (!rightValue) return nullptr;
+        auto righttype = rightValue->getType();
+
+        if (righttype == Type::getInt32Ty(TheContext)) {
+            if (node.op == TK_MINUS) {
+                if(rightValue->getType() == Type::getInt32Ty(TheContext)){
+                    return Builder.CreateFPToSI(Builder.CreateFNeg(Builder.CreateSIToFP(rightValue, Type::getFloatTy(TheContext), "int->float"), "neg temp"), Type::getInt32Ty(TheContext), "int->float");
+                }
+                else if(rightValue->getType() == Type::getFloatTy(TheContext)){
+                    return Builder.CreateFNeg(rightValue, "neg temp");
+                }
+                else report_error("the operand of \"-\" should be an integer or a float");
+            }
+        }
         return nullptr;
     }
 
@@ -2535,8 +2619,6 @@ public:
                 break;
         }
 
-//        auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
-//        AllocaInst *allocation = Builder.CreateAlloca(type, nullptr, v->var_name);
         IRBuilder<> Tmp(&func->getEntryBlock(), func->getEntryBlock().begin());
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
         AllocaInst *allocation = Tmp.CreateAlloca(type, nullptr, v->var_name);
@@ -2573,7 +2655,6 @@ public:
                 break;
         }
         return Builder.CreateLoad(type, var, node.var_name);
-//        return Builder.CreateLoad(var, node.var_name);
     }
 
     Value *visit(Block_AST_Node &node) override {
@@ -2683,6 +2764,10 @@ public:
         // Prepare to emit the code after while
         Builder.SetInsertPoint(afterWhile);
 
+        return nullptr;
+    }
+
+    Value *visit(DoWhile_AST_Node &node) override {
         return nullptr;
     }
 
@@ -2810,7 +2895,7 @@ public:
             for (auto &each: node.formalParams)
                 each->accept(*this);
 
-        // 存储caller提供的参数取值
+        // 存储参数的具体取值（由caller提供）
         std::vector<Value *> args_value;
         for (auto arg = f->arg_begin(); arg != f->arg_end(); arg++){
             args_value.push_back(arg);
@@ -2939,6 +3024,7 @@ int main(int argc, char *argv[]) {
 //        fprintf(stderr, "%s : type %d\n", currentToken.lexeme.c_str(),
 //                currentToken.type);
 //    }
+//    return 0;
 
     // 语法分析.
     Parser parser(lexer);

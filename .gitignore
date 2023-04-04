@@ -4,5 +4,6 @@ tmp*
 *.out
 *.dot
 *.png
+*.ll
 /.idea/
 /cmake-build-debug/
