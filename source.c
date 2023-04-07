@@ -1,27 +1,23 @@
-int a[5] = {1, 2, 3, 4, 5};
 
-void quicksort(int m, int n)
-/* recursively sorts a[m] through a[n] */
-{
-    int i, j;
-    int v, x;
-    if (n <= m) return;
-/* fragment begins here */
-    i = m - 1;
-    j = n;
-    v = a[n];
-    while (1) {
-        do i = i + 1; while (a[i] < v);
-        do j = j - 1; while (a[j] > v);
-        if (i >= j) break;
-        x = a[i];
-        a[i] = a[j];
-        a[j] = x; /* swap a[i], a[j] */
+int main() {
+    int a[5] = {2, 3, 58, 34, 76};
+    int n=5;  //存放数组a中元素的个数
+    int i;  //比较的轮数
+    int j;  //每轮比较的次数
+    int buf;  //交换数据时用于存放中间数据
+    for (i = 0; i < n - 1; i= i+1)  //比较n-1轮
+    {
+        for (j = 0; j < n - 1 - i; j=j+1)  //每轮比较n-1-i次,
+        {
+            if (a[j] < a[j + 1]) {
+                buf = a[j];
+                a[j] = a[j + 1];
+                a[j + 1] = buf;
+            }
+        }
     }
-    x = a[i];
-    a[i] = a[n];
-    a[n] = x; /* swap a[i], a[n] */
-/* fragment ends here */
-    quicksort(m, j);
-    quicksort(i + 1, n);
+    for (i = 0; i < n; i=i+1) {
+        print(a[i]);
+    }
+    return 0;
 }

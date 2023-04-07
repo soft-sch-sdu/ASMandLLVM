@@ -2274,16 +2274,16 @@ public:
         switch (node.value->baseType) {
             case Ty_float:
                 print_format_strings.emplace("printf_format_float", R"(    .string   "%f\n")");
-                std::cout << "    lea printf_format_float, %rdi\n";
+                std::cout << "    lea printf_format_float(%rip), %rdi\n";
                 break;
             case Ty_int:
                 print_format_strings.emplace("printf_format_int", R"(    .string   "%d\n")");
-                std::cout << "    lea printf_format_int, %rdi\n";
+                std::cout << "    lea printf_format_int(%rip), %rdi\n";
                 std::cout << "    mov %rax, %rsi\n";
                 break;
             case Ty_char:
                 print_format_strings.emplace("printf_format_char", R"(    .string   "%c\n")");
-                std::cout << "    lea printf_format_char, %rdi\n";
+                std::cout << "    lea printf_format_char(%rip), %rdi\n";
                 std::cout << "    mov %rax, %rsi\n";
                 break;
             default:
@@ -3039,8 +3039,8 @@ int main(int argc, char *argv[]) {
     X86_code_generator.X86_code_generate(*tree);
 
     // LLVM IR代码生成
-    IR_CodeGenerator IR_code_generator;
-    IR_code_generator.IR_code_generate(*tree);
+//    IR_CodeGenerator IR_code_generator;
+//    IR_code_generator.IR_code_generate(*tree);
 
     return 0;
 }

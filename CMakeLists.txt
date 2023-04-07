@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(2023spring)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 
 #LLVM configuration -1
 set(ENV{LLVM_DIR} /home/leon/llvm15-release)

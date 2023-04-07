@@ -4,7 +4,7 @@ assert() {
   input="$2"
 
   echo "$input" | ./2023spring - > tmp.s || exit
-  clang tmp.s -o tmp
+  clang++ tmp.s -o tmp
   ./tmp
   actual="$?"
 
@@ -30,7 +30,7 @@ assert 7 "int main(){int b = 7; b; }"
 assert 16 "int main(){int temp, b = 7; 9+b;}"
 assert 6 'int main(){int c; c =9; return c-3;}'
 assert 3 'int main(){int c; -9; return 3;}'
-#assert 20 "int main(int j, int k, int h){int temp, b = 11;;; int c = --9+b; return c;}"
+assert 20 "int main(int j, int k, int h){int temp, b = 11;;; int c = --9+b; return c;}"
 assert 20 "int main(int j, int k, int h){int temp, b = 11;;;; return --b+9;}"
 assert 20 "int main(int j, int k, int h){int temp, b = 11; int c; c= 6; return --b+9;}"
 assert 1 "int main(){true;}"
@@ -60,9 +60,9 @@ assert 26  " int g = 17;
              int main(){ return 9 + g; }"
 
 assert 9  " int main(){ int i = 9; return *&i; }"
-#assert 11 " int main(){ int a[5] = { 11, 12, 13, 14,15}; return a[0]; }"
-#assert 29 " int main(){ int a[5] = { 11, 12, 13, 14,15};
-#                        int temp = 3; a[4] = a[4] + temp;return a[0]+a[4]; }"
+assert 11 " int main(){ int a[5] = { 11, 12, 13, 14,15}; return a[0]; }"
+assert 29 " int main(){ int a[5] = { 11, 12, 13, 14,15};
+                        int temp = 3; a[4] = a[4] + temp;return a[0]+a[4]; }"
 assert 2 " int main(){ int i = 3, j = 4; if (i>j) return 1; else return 2; }"
 assert 5 " int main(){ if (3 <4) return 5; else return 2; }"
 assert 5 " int main(){ int i = 3, j = 4; if (i <j) return 5; else return 2; }"
