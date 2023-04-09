@@ -478,7 +478,7 @@ std::vector<TOKEN> Lexer::constructTokenStream() {
 class Symbol {
 public:
     std::string name;
-    Ty type;
+    Ty type; //类型：可以是int、float等基本类型，也可以是数组、结构体等结构化类型
 
     Symbol(std::string sym_name, Ty sym_type) :
             name(std::move(sym_name)), type(sym_type) {}
@@ -489,11 +489,13 @@ public:
 
 class Variable_Symbol : public Symbol {
 public:
-    int offset;  // 针对局部变量，包括数组
-    Ty baseType;
+    int offset;  // 对于局部变量，包括数组，是相对于rbp的偏移量;对于全局变量，是在.data中相对于rip的偏移量.
+    Ty baseType; // 基本类型：只能是int、float、char、bool等.
+//    std::vector<std::string> elements; // 用于记录全局数组初始化数据.
+    int scopeLevel;
 
-    Variable_Symbol(std::string sym_name, Ty sym_type, Ty sym_base_type, int sym_offset) :
-            Symbol(std::move(sym_name), sym_type), baseType(sym_base_type), offset(sym_offset) {}
+    Variable_Symbol(std::string sym_name, Ty sym_type, Ty sym_base_type, int sym_offset, int level) :
+            Symbol(std::move(sym_name), sym_type), baseType(sym_base_type), offset(sym_offset), scopeLevel(level) {}
 };
 
 class Function_Symbol : public Symbol {
@@ -808,6 +810,7 @@ public:
 /// 单个变量声明对应的结点
 class SingleVariableDeclaration_AST_Node : public AST_Node {
 public:
+    // 成员变量与Parameter_AST_Node类似
     std::shared_ptr<AST_Node> type; // type node
     std::shared_ptr<AST_Node> var;  // variable node
     std::vector<std::shared_ptr<AST_Node>> inits; // assignment nodes
@@ -861,8 +864,9 @@ class Variable_AST_Node : public AST_Node {
 public:
     std::string var_name;
     // 针对数组
-    int length = -1;      // 数组长度(声明数组变量时用到)
-    std::shared_ptr<AST_Node> indexExpression = nullptr; // 数组单个元素下标表达式
+    int size = -1;      // 数组长度(声明数组变量时用到)
+    std::vector<std::string> elements; // 用于记录全局变量初始化数据.
+    std::shared_ptr<AST_Node> indexExpression = nullptr; // 数组下标表达式
 
     std::shared_ptr<Variable_Symbol> symbol;
 
@@ -875,6 +879,7 @@ public:
 
 class Parameter_AST_Node : public AST_Node {
 public:
+    // 成员变量与SingleVariableDeclaration_AST_Node类似
     std::shared_ptr<AST_Node> parameterType;  // 参数类型结点
     std::shared_ptr<AST_Node> parameterVar;   // 参数名称结点
     std::shared_ptr<Variable_Symbol> symbol;
@@ -1186,9 +1191,9 @@ std::shared_ptr<AST_Node> Parser::declarator() {
         eatCurrentToken();
         if (CurrentToken.type == TK_LBRACK) {
             eatCurrentToken(); // eat "["
-            node->length = std::stoi(CurrentToken.lexeme);
+            node->size = std::stoi(CurrentToken.lexeme);
             node->type = Ty_array;
-            eatCurrentToken(); // eat length
+            eatCurrentToken(); // eat size
             eatCurrentToken(); // eat "]"
         }
         return node;
@@ -1534,14 +1539,8 @@ std::shared_ptr<AST_Node> Parser::parse() {
 // Semantic analyzer derived from Visitor
 //===----------------------------------------------------------------------===//
 
-struct global_variable {
-    std::string name;
-    Ty type;
-    std::string initialValueLiteral;
-};
-
 // 如果想在.data段列出所有全局变量，则用之，否则删掉就行.
-std::vector<global_variable> globals;
+std::vector<std::shared_ptr<Variable_AST_Node>> globals;
 
 class SemanticAnalyzer : public Visitor {
 public:
@@ -1641,30 +1640,31 @@ public:
         for (auto &init: node.inits)
             initNodes.push_back(std::dynamic_pointer_cast<Assignment_AST_Node>(init));
 
-        std::shared_ptr<Symbol> varSymbol = currentScope->lookup(varNode->var_name, true);
-        if (varSymbol == nullptr) {
+//        std::shared_ptr<Symbol> varSymbol = currentScope->lookup(varNode->var_name, true);
+        std::shared_ptr<Variable_Symbol> varSymbol;
+        if (currentScope->lookup(varNode->var_name, true) == nullptr) { // 在符号表中找不到，即尚未定义.
             if (currentScope->level == 0) {  // 全局变量.
-                varSymbol = std::make_shared<Variable_Symbol>(varNode->var_name, basetypeNode->type, basetypeNode->type,
-                                                              0);
-                std::string l;
-                if (initNodes.empty()) l = "0";
-                else {
-                    std::shared_ptr<NumLiteral_AST_Node> t =
-                            std::dynamic_pointer_cast<NumLiteral_AST_Node>(initNodes[0]->right);
-                    l = t->literal;
+                varSymbol = std::make_shared<Variable_Symbol>(varNode->var_name, varNode->type, varNode->baseType,
+                                                              0, currentScope->level);
+                for (auto &ele: node.inits) {
+                    std::string initValueLiteral = std::dynamic_pointer_cast<NumLiteral_AST_Node>(
+                            std::dynamic_pointer_cast<Assignment_AST_Node>(ele)->right)->literal;
+                    varNode->elements.push_back(initValueLiteral);
                 }
-                globals.push_back(global_variable{varNode->var_name, basetypeNode->type, l});
+
+                globals.push_back(varNode);
             } else {  // 局部变量.
-                if (varNode->type != Ty_array) {  // 1.非数组.
+                if (varNode->type != Ty_array) {    // 1.非数组.
                     if (basetypeNode->type == Ty_char) offsetSum += 1;
                     else offsetSum += 8;
                 } else {                            // 2.数组.
                     if (basetypeNode->type == Ty_int || basetypeNode->type == Ty_float)
-                        offsetSum = offsetSum + varNode->length * 8;
+                        offsetSum = offsetSum + varNode->size * 8;
                 }
                 varSymbol = std::make_shared<Variable_Symbol>(varNode->var_name, varNode->type, basetypeNode->type,
-                                                              -offsetSum);
+                                                              -offsetSum, currentScope->level);
             }
+            varNode->symbol = varSymbol;
             currentScope->insert(varSymbol);
             varNode->symbol = std::dynamic_pointer_cast<Variable_Symbol>(varSymbol);
         } else {
@@ -1789,7 +1789,7 @@ public:
 
         offsetSum += 8;
         auto sym = std::make_shared<Variable_Symbol>(paramVarNode->var_name, paramTypeNode->type, paramTypeNode->type,
-                                                     -offsetSum);
+                                                     -offsetSum, currentScope->level);
         currentScope->insert(sym);
         node.symbol = sym;
         return nullptr;
@@ -1822,7 +1822,7 @@ public:
 
         // visit函数体.
         auto fun_block = std::dynamic_pointer_cast<Block_AST_Node>(node.funcBlock);
-        for (auto &stmt : fun_block->statements) stmt->accept(*this);
+        for (auto &stmt: fun_block->statements) stmt->accept(*this);
 
         node.offset = offsetSum; // 此值即代码生成阶段的stack_size.
         return nullptr;
@@ -1909,37 +1909,64 @@ public:
     }
 
     void generate_variable_address(Variable_AST_Node &varNode) {
-        int var_offset = varNode.symbol->offset;
         /* 1. 全局变量 */
-        if (var_offset == 0)  // offset=0，则是全局变量，位于.data段
-            std::cout << "    lea " << varNode.var_name << "(%rip), %rax\n";
-            /* 2. 局部变量 */
+        if (varNode.symbol->scopeLevel == 0) {
+            if (varNode.type == Ty_array) { // 全局数组变量，位于.data段.
+                varNode.indexExpression->accept(*this);
+                std::cout << "    mov %rax, %rcx\n";    // 数组元素index
+                std::cout << "    lea " << varNode.var_name << "(%rip), %rax\n"; // 数组起始地址
+            }
+            else // 全局非结构化变量，位于.data段.
+                std::cout << "    lea " << varNode.var_name << "(%rip), %rax\n";
+        }
+        /* 2. 局部变量 */
         else if (varNode.type == Ty_array) { // 若是数组元素，数组各个元素从左往右，内存地址从小到大(从下到上).
             varNode.indexExpression->accept(*this);
             std::cout << "    imul $8, %rax" << std::endl;
             std::cout << "    push %rax" << std::endl;
-            std::cout << "    lea " << var_offset << "(%rbp), %rax" << std::endl;
+            std::cout << "    lea " << varNode.symbol->offset << "(%rbp), %rax" << std::endl;
             std::cout << "    pop %rdi" << std::endl;
             std::cout << "    add %rdi, %rax" << std::endl;
         } else // 若不是数组
-            std::cout << "    lea " << var_offset << "(%rbp), %rax\n";
+            std::cout << "    lea " << varNode.symbol->offset << "(%rbp), %rax\n";
     }
 
     Value *visit(Assignment_AST_Node &node) override {
         // 赋值语句的左值是地址.
-        // 获取该地址，放入%rax，并由%rax入栈.
-        generate_variable_address(*std::dynamic_pointer_cast<Variable_AST_Node>(node.left));
-        std::cout << "    push %rax\n";
-
-        // 赋值语句的右值是数值.
-        node.right->accept(*this);
-        std::cout << "    pop %rdi\n";
-        // 若right-side是int类型的结果，则位于%rax; 若是float类型，则位于%xxm0.
-        if (node.baseType == Ty_float) { // float类型的结果.
-            if (node.right->baseType < Ty_float) // 若%rax参与float类型的运算，
-                std::cout << "    cvtsi2sd %rax, %xmm0\n"; // 则需将之转换成float类型，并放入%xmm0.
-            std::cout << "    movsd %xmm0, (%rdi)\n";
-        } else std::cout << "    mov %rax, (%rdi)\n"; // int or bool, 即int类型的结果.
+        std::shared_ptr<Variable_AST_Node> leftNode = std::dynamic_pointer_cast<Variable_AST_Node>(node.left);
+        /* 1. 全局变量 */
+        if (leftNode->symbol->scopeLevel == 0) {
+            // 获取该地址，因是全局变量.
+            generate_variable_address(*leftNode);
+            std::cout << "    push %rax\n";
+            std::cout << "    push %rcx\n";
+            // 赋值语句的右值是数值.
+            node.right->accept(*this);
+            std::cout << "    pop %rcx\n";
+            std::cout << "    pop %rdi\n";
+            // 若right-side是int类型的结果，则位于%rax; 若是float类型，则位于%xxm0.
+            if (node.baseType == Ty_float) { // float类型的结果.
+                if (node.right->baseType < Ty_float) // 若%rax参与float类型的运算，
+                    std::cout << "    cvtsi2sd %rax, %xmm0\n"; // 则需将之转换成float类型，并放入%xmm0.
+                std::cout << "    movsd %xmm0, (%rdi, %rcx, 8)\n";
+            } else std::cout << "    mov %rax, (%rdi, %rcx, 8)\n"; // int or bool, 即int类型的结果.
+        }
+        /* 2. 局部变量 */
+        else {
+            // 获取该地址，因是局部变量，该地址被放入%rax.
+            generate_variable_address(*leftNode);
+            // 由%rax入栈.
+            std::cout << "    push %rax\n";
+            // 赋值语句的右值是数值.
+            node.right->accept(*this);
+            std::cout << "    pop %rdi\n";
+            // 若right-side是int类型的结果，则位于%rax; 若是float类型，则位于%xxm0.
+            if (node.baseType == Ty_float) { // float类型的结果.
+                if (node.right->baseType < Ty_float) // 若%rax参与float类型的运算，
+                    std::cout << "    cvtsi2sd %rax, %xmm0\n"; // 则需将之转换成float类型，并放入%xmm0.
+                std::cout << "    movsd %xmm0, (%rdi)\n";
+            } else std::cout << "    mov %rax, (%rdi)\n"; // int or bool, 即int类型的结果.
+        }
         return nullptr;
     }
 
@@ -2149,22 +2176,29 @@ public:
 
     Value *visit(Variable_AST_Node &node) override {
         /* 变量是右值 */
-        // 1.首先，获取其在内存中的地址，存于%rax：
-        int var_offset = node.symbol->offset;
-        // 情况1：若offset=0，则是全局变量，位于.data段
-        if (var_offset == 0)  //
-            std::cout << "    lea " << node.var_name << "(%rip), %rax\n";
-        else // 情况2：局部变量或参数，位于栈
-            generate_variable_address(node);
+        // 1.首先，获取其在内存中的地址
+        generate_variable_address(node);
 
         // 2.然后，将其值由内存放入寄存器.
-        if (node.baseType == Ty_float)          // 若是float，
-            std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0.
-        else if (node.baseType == Ty_int ||
-                 node.baseType == Ty_bool ||
-                 node.baseType == Ty_char ||
-                 node.baseType == Ty_array)      // 否则，
-            std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax.
+            // 2.1 全局变量
+        if (node.symbol->scopeLevel == 0) {
+            if (node.type == Ty_array) {
+                if (node.baseType == Ty_float)          // 若是float，
+                    std::cout << "    movsd (%rax,%rcx,8), %xmm0\n";  // 其值放入%xmm0.
+                else std::cout << "    mov (%rax,%rcx,8), %rax\n";     // 其值放入%rax.
+            } else {
+                if (node.baseType == Ty_float)          // 若是float，
+                    std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0.
+                else std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax.
+            }
+        }
+        else {
+            // 2.2 局部变量
+            if (node.baseType == Ty_float)          // 若是float，
+                std::cout << "    movsd (%rax), %xmm0\n";  // 其值放入%xmm0.
+            else  // 否则，
+                std::cout << "    mov (%rax), %rax\n";     // 其值放入%rax.
+        }
         return nullptr;
     }
 
@@ -2372,11 +2406,12 @@ public:
         //    将全局或静态变量对应的汇编代码放在最后即可
         if (!globals.empty()) std::cout << "\n" << "    .data\n";
         for (auto &gvar: globals) {
-            std::cout << gvar.name << ":\n";
-            if (gvar.type == Ty_float)
-                std::cout << "    .double " << gvar.initialValueLiteral << "\n";
-            else // if (gvar.type == Ty_int)
-                std::cout << "    .long " << gvar.initialValueLiteral << "\n";
+            std::cout << gvar->var_name << ":\n";
+            for (auto &e : gvar->elements)
+                if (gvar->baseType == Ty_float)
+                    std::cout << "    .double " << e << "\n";
+                else // if (gvar.type == Ty_int)
+                    std::cout << "    .quad " << e << "\n";
         }
         return nullptr;
     }
@@ -2494,79 +2529,62 @@ public:
             if (lefttype == Type::getInt32Ty(TheContext)) {
                 if (node.op == TK_PLUS) {
                     return Builder.CreateAdd(L, R, "addtmp");
-                }
-                else if (node.op == TK_MINUS) {
+                } else if (node.op == TK_MINUS) {
                     return Builder.CreateSub(L, R, "subtmp");
-                }
-                else if(node.op == TK_MULorDEREF){
+                } else if (node.op == TK_MULorDEREF) {
                     return Builder.CreateMul(L, R, "multmp");
-                }
-                else if(node.op == TK_DIV){
+                } else if (node.op == TK_DIV) {
                     return Builder.CreateSDiv(L, R, "dictmp");
-                }
-                else if(node.op == TK_LT){
+                } else if (node.op == TK_LT) {
                     L = Builder.CreateICmpULT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_GT){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_GT) {
                     L = Builder.CreateICmpUGT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_LE){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_LE) {
                     L = Builder.CreateICmpULE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_GE){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_GE) {
                     L = Builder.CreateICmpUGE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_EQ){
-                    Value* LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
-                    Value* RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_EQ) {
+                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
+                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
                     L = Builder.CreateFCmpUEQ(LF, RF, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_NE){
-                    Value* LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
-                    Value* RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_NE) {
+                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
+                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
                     L = Builder.CreateFCmpUNE(LF, RF, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
                 }
             } else if (lefttype == Type::getFloatTy(TheContext)) {
                 if (node.op == TK_PLUS) {
                     return Builder.CreateFAdd(L, R, "addtmp");
                 } else if (node.op == TK_MINUS) {
                     return Builder.CreateFSub(L, R, "subtmp");
-                }
-                else if(node.op == TK_MULorDEREF){
+                } else if (node.op == TK_MULorDEREF) {
                     return Builder.CreateFMul(L, R, "multmp");
-                }
-                else if(node.op == TK_DIV){
+                } else if (node.op == TK_DIV) {
                     return Builder.CreateFDiv(L, R, "dictmp");
-                }
-                else if(node.op == TK_LT){
+                } else if (node.op == TK_LT) {
                     L = Builder.CreateFCmpULT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_GT){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_GT) {
                     L = Builder.CreateFCmpUGT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_LE){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_LE) {
                     L = Builder.CreateFCmpULE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_GE){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_GE) {
                     L = Builder.CreateFCmpUGE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_EQ){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_EQ) {
                     L = Builder.CreateFCmpUEQ(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
-                }
-                else if(node.op == TK_NE){
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                } else if (node.op == TK_NE) {
                     L = Builder.CreateFCmpUNE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext),"booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
                 }
             }
 
@@ -2581,13 +2599,13 @@ public:
 
         if (righttype == Type::getInt32Ty(TheContext)) {
             if (node.op == TK_MINUS) {
-                if(rightValue->getType() == Type::getInt32Ty(TheContext)){
-                    return Builder.CreateFPToSI(Builder.CreateFNeg(Builder.CreateSIToFP(rightValue, Type::getFloatTy(TheContext), "int->float"), "neg temp"), Type::getInt32Ty(TheContext), "int->float");
-                }
-                else if(rightValue->getType() == Type::getFloatTy(TheContext)){
+                if (rightValue->getType() == Type::getInt32Ty(TheContext)) {
+                    return Builder.CreateFPToSI(Builder.CreateFNeg(
+                                                        Builder.CreateSIToFP(rightValue, Type::getFloatTy(TheContext), "int->float"), "neg temp"),
+                                                Type::getInt32Ty(TheContext), "int->float");
+                } else if (rightValue->getType() == Type::getFloatTy(TheContext)) {
                     return Builder.CreateFNeg(rightValue, "neg temp");
-                }
-                else report_error("the operand of \"-\" should be an integer or a float");
+                } else report_error("the operand of \"-\" should be an integer or a float");
             }
         }
         return nullptr;
@@ -2604,11 +2622,11 @@ public:
         switch (node.baseType) {
             case Ty_int:
                 type = Type::getInt32Ty(TheContext);
-                value = ConstantInt::get(TheContext, APInt(32,0));
+                value = ConstantInt::get(TheContext, APInt(32, 0));
                 break;
             case Ty_bool:
                 type = Type::getInt1Ty(TheContext);
-                value = ConstantInt::get(TheContext, APInt(1,0));
+                value = ConstantInt::get(TheContext, APInt(1, 0));
                 break;
             case Ty_float:
                 type = Type::getFloatTy(TheContext);
@@ -2625,7 +2643,7 @@ public:
 
         scope.push(v->var_name, allocation);
 
-        for (auto &each : node.inits)
+        for (auto &each: node.inits)
             each->accept(*this);
 
         return nullptr;
@@ -2672,7 +2690,7 @@ public:
         // 通过与0或0.0比较，确认将该值转换为bool类型的值.
         if (condV->getType() == Type::getInt1Ty(TheContext)) {
             condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "ifcondition");
-        } else if(condV->getType() == Type::getInt32Ty(TheContext)){
+        } else if (condV->getType() == Type::getInt32Ty(TheContext)) {
             condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "ifcondition");
         } else {
             condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "ifcondition");
@@ -2680,7 +2698,7 @@ public:
 
         Function *TheFunction = Builder.GetInsertBlock()->getParent();
 
-        if(node.else_statement != nullptr){ // 有else
+        if (node.else_statement != nullptr) { // 有else
             auto trueBB = BasicBlock::Create(TheContext, "if.then", TheFunction);
             auto falseBB = BasicBlock::Create(TheContext, "if.else", TheFunction);
             // 创建after_ifBB基本块时，无需参数TheFunction，
@@ -2694,7 +2712,7 @@ public:
             Builder.SetInsertPoint(trueBB);
             node.then_statement->accept(*this); // 插入trueBB基本块的代码.
             int insertedFlag = 0;
-            if(Builder.GetInsertBlock()->getTerminator() == nullptr){ // not returned inside the block
+            if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
                 after_ifBB->insertInto(TheFunction); // 确定插入after_ifBB.
                 insertedFlag = 1;                    // 设置标志，说明已确定插入
                 Builder.CreateBr(after_ifBB);        // 跳到after_ifBB基本块
@@ -2703,17 +2721,16 @@ public:
             // falseBB
             Builder.SetInsertPoint(falseBB);
             node.else_statement->accept(*this); // 插入falseBB基本块的代码.
-            if(Builder.GetInsertBlock()->getTerminator() == nullptr){ // not returned inside the block
-                if (!insertedFlag){     // 若尚未决定是否插入after_ifBB.
+            if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
+                if (!insertedFlag) {     // 若尚未决定是否插入after_ifBB.
                     after_ifBB->insertInto(TheFunction); // 确定插入after_ifBB.
                     insertedFlag = 1;                    // 设置标志，说明已确定插入.
                 }
                 Builder.CreateBr(after_ifBB); // 跳到after_ifBB基本块
             }
             // 在这里插入after_ifBB基本块代码.
-            if(insertedFlag) Builder.SetInsertPoint(after_ifBB);
-        }
-        else{  // 没有else部分
+            if (insertedFlag) Builder.SetInsertPoint(after_ifBB);
+        } else {  // 没有else部分
             auto trueBranch = BasicBlock::Create(TheContext, "trueBranch", TheFunction);
             auto after_ifBB = BasicBlock::Create(TheContext, "after-if", TheFunction);
             Builder.CreateCondBr(condV, trueBranch, after_ifBB);
@@ -2723,7 +2740,8 @@ public:
             node.then_statement->accept(*this);
 
             // after_ifBB
-            if(Builder.GetInsertBlock()->getTerminator() == nullptr) Builder.CreateBr(after_ifBB); // not returned inside the block
+            if (Builder.GetInsertBlock()->getTerminator() == nullptr)
+                Builder.CreateBr(after_ifBB); // not returned inside the block
             Builder.SetInsertPoint(after_ifBB);
         }
         return nullptr;
@@ -2735,7 +2753,7 @@ public:
         BasicBlock *whileBody = BasicBlock::Create(TheContext, "while.body", func);
         BasicBlock *afterWhile = BasicBlock::Create(TheContext, "after-while", func);
 
-        if(Builder.GetInsertBlock()->getTerminator() == nullptr)
+        if (Builder.GetInsertBlock()->getTerminator() == nullptr)
             Builder.CreateBr(condition);
 
         // Prepare to emit the body of while
@@ -2747,7 +2765,7 @@ public:
         // condition的值可能是各种类型的值，通过与0或0.0比较，确认将其转换为bool类型的值.
         if (condV->getType() == Type::getInt1Ty(TheContext)) {
             condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "whilecondition");
-        } else if(condV->getType() == Type::getInt32Ty(TheContext)){
+        } else if (condV->getType() == Type::getInt32Ty(TheContext)) {
             condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "whilecondition");
         } else {
             condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "whilecondition");
@@ -2758,7 +2776,7 @@ public:
         Builder.SetInsertPoint(whileBody);
         // Emit the body of
         node.statement->accept(*this);
-        if(Builder.GetInsertBlock()->getTerminator() == nullptr)
+        if (Builder.GetInsertBlock()->getTerminator() == nullptr)
             Builder.CreateBr(condition);
 
         // Prepare to emit the code after while
@@ -2789,12 +2807,11 @@ public:
 
     Value *visit(FunctionCall_AST_Node &node) override {
         Function *callerFunc = TheModule->getFunction(node.funcName);
-        if(callerFunc == nullptr){
+        if (callerFunc == nullptr) {
             exit(0);
-        }
-        else {
+        } else {
             std::vector<Value *> funargs;
-            for(auto& expr : node.arguments) {
+            for (auto &expr: node.arguments) {
                 auto argValue = expr->accept(*this);
                 funargs.push_back(argValue);
             }
@@ -2864,7 +2881,8 @@ public:
         }
 
         // 构建函数头（不含函数体）
-        FunctionType *FunctionType = FunctionType::get(return_type, parameterTypes, false/* doesn't have variadic args */);
+        FunctionType *FunctionType = FunctionType::get(return_type, parameterTypes,
+                                                       false/* doesn't have variadic args */);
         Function *F = Function::Create(FunctionType,
                                        Function::ExternalLinkage,
                                        node.funcName,
@@ -2897,16 +2915,16 @@ public:
 
         // 存储参数的具体取值（由caller提供）
         std::vector<Value *> args_value;
-        for (auto arg = f->arg_begin(); arg != f->arg_end(); arg++){
+        for (auto arg = f->arg_begin(); arg != f->arg_end(); arg++) {
             args_value.push_back(arg);
         }
-        if(!node.formalParams.empty() && !args_value.empty()){ // assert node params size = args_value size
+        if (!node.formalParams.empty() && !args_value.empty()) { // assert node params size = args_value size
             int i = 0;
-            for (auto& arg : node.formalParams){
+            for (auto &arg: node.formalParams) {
                 auto p = std::dynamic_pointer_cast<Parameter_AST_Node>(arg);
                 auto pVar = std::dynamic_pointer_cast<Variable_AST_Node>(p->parameterVar);
                 auto pAlloc = scope.find(pVar->var_name);
-                if(pAlloc == nullptr){
+                if (pAlloc == nullptr) {
                     exit(0);
                 } else {
                     Builder.CreateStore(args_value[i++], pAlloc);
@@ -2927,37 +2945,37 @@ public:
         // 1. 对于全局变量，已经在语义分析阶段将其信息导入globals，
         //    故无需遍历全局变量List，而只需根据globals处理
         scope.enter_new(); // enter global scope
-        for (auto &gvar: globals) {
-            switch (gvar.type) {
-                case Ty_int: {
-                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt32Ty(TheContext), false,
-                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
-                                                      ConstantInt::get(TheContext,
-                                                                       APInt(32, std::stoi(gvar.initialValueLiteral))));
-                    scope.push(gvar.name, gdAlloc);
-                    break;
-                }
-                case Ty_bool: {
-                    ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(TheContext));
-                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt1Ty(TheContext), false,
-                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
-                                                      ConstantInt::get(TheContext,
-                                                                       APInt(1, std::stoi(gvar.initialValueLiteral))));
-                    scope.push(gvar.name, gdAlloc);
-                    break;
-                }
-                case Ty_float: {
-                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getFloatTy(TheContext), false,
-                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
-                                                      ConstantFP::get(TheContext,
-                                                                      APFloat(std::stof(gvar.initialValueLiteral))));
-                    scope.push(gvar.name, gdAlloc);
-                    break;
-                }
-                default:
-                    break;
-            }
-        }
+//        for (auto &gvar: globals) {
+//            switch (gvar.type) {
+//                case Ty_int: {
+//                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt32Ty(TheContext), false,
+//                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
+//                                                      ConstantInt::get(TheContext,
+//                                                                       APInt(32, std::stoi(gvar.initialValueLiteral))));
+//                    scope.push(gvar.name, gdAlloc);
+//                    break;
+//                }
+//                case Ty_bool: {
+//                    ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(TheContext));
+//                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt1Ty(TheContext), false,
+//                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
+//                                                      ConstantInt::get(TheContext,
+//                                                                       APInt(1, std::stoi(gvar.initialValueLiteral))));
+//                    scope.push(gvar.name, gdAlloc);
+//                    break;
+//                }
+//                case Ty_float: {
+//                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getFloatTy(TheContext), false,
+//                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
+//                                                      ConstantFP::get(TheContext,
+//                                                                      APFloat(std::stof(gvar.initialValueLiteral))));
+//                    scope.push(gvar.name, gdAlloc);
+//                    break;
+//                }
+//                default:
+//                    break;
+//            }
+//        }
 
         // 2. 对于函数，逐一处理
         if (!node.funcDeclarationList.empty())
