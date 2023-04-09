@@ -2011,35 +2011,36 @@ public:
                 case TK_GT: // ">"
                 case TK_GE: // ">="
                 {
+                    std::cout << "    mov $0, %rax" << std::endl;
                     std::cout << "    ucomisd %xmm0, %xmm1" << std::endl;
                     switch (node.op) {
                         case TK_EQ:
-                            std::cout << "    sete %al" << std::endl;
-                            std::cout << "    setnp %dl" << std::endl;
-                            std::cout << "    and %dl, %al" << std::endl;
+                            std::cout << "    movq $1, %rcx" << std::endl;
+                            std::cout << "    cmove %rcx, %rax" << std::endl;
                             break;
                         case TK_NE:
-                            std::cout << "    setne %al" << std::endl;
-                            std::cout << "    setp %dl" << std::endl;
-                            std::cout << "    or %dl, %al" << std::endl;
+                            std::cout << "    movq $1, %rcx" << std::endl;
+                            std::cout << "    cmovne %rcx, %rax" << std::endl;
                             break;
                         case TK_LT:
-                            std::cout << "    setb %al" << std::endl;
+                            std::cout << "    movq $1, %rcx" << std::endl;
+                            std::cout << "    cmovb %rcx, %rax" << std::endl;
                             break;
                         case TK_LE:
-                            std::cout << "    setbe %al" << std::endl;
+                            std::cout << "    movq $1, %rcx" << std::endl;
+                            std::cout << "    cmovbe %rcx, %rax" << std::endl;
                             break;
                         case TK_GT:
-                            std::cout << "    seta %al" << std::endl;
+                            std::cout << "    movq $1, %rcx" << std::endl;
+                            std::cout << "    cmova %rcx, %rax" << std::endl;
                             break;
                         case TK_GE:
-                            std::cout << "    setae %al" << std::endl;
+                            std::cout << "    movq $1, %rcx" << std::endl;
+                            std::cout << "    cmovae %rcx, %rax" << std::endl;
                             break;
                         default:
                             break;
                     }
-                    std::cout << "    and $1, %al" << std::endl;
-                    std::cout << "    movzb %al, %rax" << std::endl;
                     return nullptr;
                 }
 
@@ -2209,7 +2210,7 @@ public:
     }
 
     static void compare_zero(std::shared_ptr<AST_Node> &condition) {
-        if (condition->baseType != Ty_float)
+        if (condition->type != Ty_float)
             std::cout << "    cmp $0, %rax" << std::endl;
         else { //  比如 if (3.1 - 3.1)，即 if (0.0) 的场合
             std::cout << "    xorpd %xmm1, %xmm1" << std::endl;
