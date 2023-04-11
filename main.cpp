@@ -10,6 +10,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
@@ -811,12 +812,12 @@ public:
 class SingleVariableDeclaration_AST_Node : public AST_Node {
 public:
     // 成员变量与Parameter_AST_Node类似
-    std::shared_ptr<AST_Node> type; // type node
-    std::shared_ptr<AST_Node> var;  // variable node
+    std::shared_ptr<AST_Node> typeNode; // type node
+    std::shared_ptr<AST_Node> varNode;  // variable node
     std::vector<std::shared_ptr<AST_Node>> inits; // assignment nodes
-    SingleVariableDeclaration_AST_Node(std::shared_ptr<AST_Node> typeNode, std::shared_ptr<AST_Node> varNode,
+    SingleVariableDeclaration_AST_Node(std::shared_ptr<AST_Node> ty_node, std::shared_ptr<AST_Node> var_node,
                                        std::vector<std::shared_ptr<AST_Node>> assignNodes)
-            : type(std::move(typeNode)), var(std::move(varNode)), inits(std::move(assignNodes)) {}
+            : typeNode(std::move(ty_node)), varNode(std::move(var_node)), inits(std::move(assignNodes)) {}
 
     Value *accept(Visitor &v) override {
         return v.visit(*this);
@@ -1627,20 +1628,21 @@ public:
 
     Value *visit(SingleVariableDeclaration_AST_Node &node) override {
         // 类型.
-        node.type->accept(*this);
-        std::shared_ptr<BaseType_AST_Node> basetypeNode = std::dynamic_pointer_cast<BaseType_AST_Node>(node.type);
-        std::shared_ptr<Variable_AST_Node> varNode = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
+        node.typeNode->accept(*this);
+        std::shared_ptr<BaseType_AST_Node> basetypeNode = std::dynamic_pointer_cast<BaseType_AST_Node>(node.typeNode);
+        std::shared_ptr<Variable_AST_Node> varNode = std::dynamic_pointer_cast<Variable_AST_Node>(node.varNode);
         // varNode与basetypeNode是兄弟结点，用属性文法的术语讲，varNode的baseType属性是继承属性.
         // 该属性值的计算属SDT的内容，还是属于语义分析的内容？
-        if (varNode->type == Ty_array) varNode->baseType = basetypeNode->type;
-        else varNode->type = varNode->baseType = basetypeNode->type;
-        node.baseType = varNode->type;
+        if (varNode->type == Ty_array) {
+            node.baseType = varNode->baseType = basetypeNode->type;
+            node.type = Ty_array;
+        }
+        else node.type = node.baseType = varNode->type = varNode->baseType = basetypeNode->type;
 
         std::vector<std::shared_ptr<Assignment_AST_Node>> initNodes;
         for (auto &init: node.inits)
             initNodes.push_back(std::dynamic_pointer_cast<Assignment_AST_Node>(init));
 
-//        std::shared_ptr<Symbol> varSymbol = currentScope->lookup(varNode->var_name, true);
         std::shared_ptr<Variable_Symbol> varSymbol;
         if (currentScope->lookup(varNode->var_name, true) == nullptr) { // 在符号表中找不到，即尚未定义.
             if (currentScope->level == 0) {  // 全局变量.
@@ -2043,7 +2045,6 @@ public:
                     }
                     return nullptr;
                 }
-
                 default:
                     return nullptr;
             }
@@ -2120,12 +2121,11 @@ public:
                 if (node.baseType == Ty_int)
                     std::cout << "    neg %rax" << std::endl;
                 else {
-                    // 下面的四步将一个float取负数，即实现 %xmm0 = (-1) * %xmm0.
-                    // 是有点啰嗦. chibicc有另一个解决方案，但是也需要四步，同样啰嗦 :)
-                    std::cout << "    mov $1, %rax" << std::endl;
-                    std::cout << "    neg %rax" << std::endl;
-                    std::cout << "    cvtsi2sd %rax, %xmm1" << std::endl;
-                    std::cout << "    mulsd %xmm1, %xmm0" << std::endl;
+                    // 下面的三步将一个float取负数，即实现 %xmm0 = 0 - %xmm0.
+                    // 是有点啰嗦. chibicc有另一个解决方案，但是需要四步，同样啰嗦 :)
+                    std::cout << "    movsd %xmm0, %xmm1" << std::endl;
+                    std::cout << "    xorpd %xmm0, %xmm0" << std::endl;
+                    std::cout << "    subsd %xmm1, %xmm0" << std::endl;
                 }
                 return nullptr;
             }
@@ -2507,13 +2507,25 @@ public:
     }
 
     Value *visit(Assignment_AST_Node &node) override {
-        /* 赋值语句的左值是地址，获取该地址。该地址在访问SingleVariableDeclaration_AST_Node时，
-         * 已经分配，并记录在符号表，即scope.                 */
+        /* 赋值语句的左值是地址，获取该地址.
+         * 该地址在访问SingleVariableDeclaration_AST_Node时已经分配，并记录在符号表中，即scope.
+         * 注意，对于数组（全局与局部有不同吗？），该地址是数组0号元素的地址*/
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.left);
         Value *var = scope.find(v->var_name);
 
-        Value *value = node.right->accept(*this);
-        return Builder.CreateStore(value, var);
+        if (node.type == Ty_array) {
+            Value* index = v->indexExpression->accept(*this);
+            Type *intTy = Builder.getInt32Ty();
+            Value *elemPtr = Builder.CreateGEP(intTy, var, {index});
+            Value *value = node.right->accept(*this);
+            Builder.CreateStore(value, elemPtr);
+
+        }
+        else {
+            Value *value = node.right->accept(*this);
+            return Builder.CreateStore(value, var);
+        }
+        return nullptr;
     }
 
     Value *visit(BinaryOperator_AST_Node &node) override {
@@ -2618,31 +2630,52 @@ public:
 
     Value *visit(SingleVariableDeclaration_AST_Node &node) override {
         Function *func = Builder.GetInsertBlock()->getParent();
-        Type *type;
-        Value *value;
-        switch (node.baseType) {
-            case Ty_int:
-                type = Type::getInt32Ty(TheContext);
-                value = ConstantInt::get(TheContext, APInt(32, 0));
-                break;
-            case Ty_bool:
-                type = Type::getInt1Ty(TheContext);
-                value = ConstantInt::get(TheContext, APInt(1, 0));
-                break;
-            case Ty_float:
-                type = Type::getFloatTy(TheContext);
-                value = ConstantFP::get(TheContext, APFloat(0.0));
-                break;
-            default:
-                type = nullptr;
-                break;
-        }
-
         IRBuilder<> Tmp(&func->getEntryBlock(), func->getEntryBlock().begin());
-        auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.var);
-        AllocaInst *allocation = Tmp.CreateAlloca(type, nullptr, v->var_name);
+        auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.varNode);
+        if (node.type == Ty_array) { // 局部变量是数组，创建ArrayType，用于分配数组的空间.
+            Value *lArrayAlloc = nullptr;
+            ArrayType* arrayType;
+            switch (node.baseType) {
+                case Ty_int:
+                    arrayType = ArrayType::get(Type::getInt32Ty(TheContext), node.inits.size());
+                    lArrayAlloc = Tmp.CreateAlloca(arrayType);
+                    break;
+                case Ty_bool:
+                    arrayType = ArrayType::get(Type::getInt1Ty(TheContext), node.inits.size());
+                    lArrayAlloc = Tmp.CreateAlloca(arrayType);
+                    break;
+                case Ty_float:
+                    arrayType = ArrayType::get(Type::getFloatTy(TheContext), node.inits.size());
+                    lArrayAlloc = Tmp.CreateAlloca(arrayType);
+                    break;
+                default:
+                    break;
+            }
+            scope.push(v->var_name, lArrayAlloc);
+        } else { // 局部变量非数组
+            Type *type;
+            Value *value;
+            switch (node.baseType) {
+                case Ty_int:
+                    type = Type::getInt32Ty(TheContext);
+                    value = ConstantInt::get(TheContext, APInt(32, 0));
+                    break;
+                case Ty_bool:
+                    type = Type::getInt1Ty(TheContext);
+                    value = ConstantInt::get(TheContext, APInt(1, 0));
+                    break;
+                case Ty_float:
+                    type = Type::getFloatTy(TheContext);
+                    value = ConstantFP::get(TheContext, APFloat(0.0));
+                    break;
+                default:
+                    type = nullptr;
+                    break;
+            }
 
-        scope.push(v->var_name, allocation);
+            AllocaInst *allocation = Tmp.CreateAlloca(type, nullptr, v->var_name);
+            scope.push(v->var_name, allocation);
+        }
 
         for (auto &each: node.inits)
             each->accept(*this);
@@ -2672,6 +2705,12 @@ public:
             default:
                 type = nullptr;
                 break;
+        }
+        if (node.type == Ty_array) {
+            Value* index = node.indexExpression->accept(*this);
+            Type *intTy = Builder.getInt32Ty();
+            Value *elemPtr = Builder.CreateGEP(intTy, var, {index});
+            return Builder.CreateLoad(intTy, elemPtr);
         }
         return Builder.CreateLoad(type, var, node.var_name);
     }
@@ -2946,37 +2985,73 @@ public:
         // 1. 对于全局变量，已经在语义分析阶段将其信息导入globals，
         //    故无需遍历全局变量List，而只需根据globals处理
         scope.enter_new(); // enter global scope
-//        for (auto &gvar: globals) {
-//            switch (gvar.type) {
-//                case Ty_int: {
-//                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt32Ty(TheContext), false,
-//                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
-//                                                      ConstantInt::get(TheContext,
-//                                                                       APInt(32, std::stoi(gvar.initialValueLiteral))));
-//                    scope.push(gvar.name, gdAlloc);
-//                    break;
-//                }
-//                case Ty_bool: {
-//                    ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(TheContext));
-//                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt1Ty(TheContext), false,
-//                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
-//                                                      ConstantInt::get(TheContext,
-//                                                                       APInt(1, std::stoi(gvar.initialValueLiteral))));
-//                    scope.push(gvar.name, gdAlloc);
-//                    break;
-//                }
-//                case Ty_float: {
-//                    auto gdAlloc = new GlobalVariable(*TheModule, Type::getFloatTy(TheContext), false,
-//                                                      GlobalVariable::LinkageTypes::ExternalLinkage,
-//                                                      ConstantFP::get(TheContext,
-//                                                                      APFloat(std::stof(gvar.initialValueLiteral))));
-//                    scope.push(gvar.name, gdAlloc);
-//                    break;
-//                }
-//                default:
-//                    break;
-//            }
-//        }
+        for (auto &gvar: globals) {
+            if (gvar->type == Ty_array) {
+                switch (gvar->baseType) {
+                    case Ty_int: {
+                        // 创建数组类型
+                        ArrayType *arrayType = ArrayType::get(Type::getInt32Ty(TheContext), gvar->elements.size());
+                        // 声明全局数组
+                        auto gdAlloc = new GlobalVariable(*TheModule, arrayType, false,
+                                                                         GlobalValue::LinkageTypes::ExternalLinkage,
+                                                                         ConstantAggregateZero::get(arrayType),
+                                                                         gvar->var_name);
+
+                        // 初始化常量数组
+                        std::vector<Constant *> elements;
+                        for (auto &e: gvar->elements) {
+                            elements.push_back(ConstantInt::get(Type::getInt32Ty(TheContext), std::stoi(e)));
+                        }
+                        Constant *arrayInitializer = ConstantArray::get(arrayType, elements);
+                        gdAlloc->setInitializer(arrayInitializer);
+
+                        scope.push(gvar->var_name, gdAlloc);
+                        break;
+                    }
+//                    case Ty_bool:
+//                        arrayType = ArrayType::get(Type::getInt1Ty(TheContext), gvar->elements.size());
+//                        break;
+//                    case Ty_float:
+//                        arrayType = ArrayType::get(Type::getFloatTy(TheContext), gvar->elements.size());
+//                        break;
+                    default:
+                        break;
+                }
+
+
+            } else {
+                switch (gvar->baseType) {
+                    case Ty_int: {
+                        auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt32Ty(TheContext), false,
+                                                          GlobalVariable::LinkageTypes::ExternalLinkage,
+                                                          ConstantInt::get(TheContext,
+                                                                           APInt(32, std::stoi(gvar->elements[0]))));
+                        scope.push(gvar->var_name, gdAlloc);
+                        break;
+                    }
+                    case Ty_bool: {
+                        ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(TheContext));
+                        auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt1Ty(TheContext), false,
+                                                          GlobalVariable::LinkageTypes::ExternalLinkage,
+                                                          ConstantInt::get(TheContext,
+                                                                           APInt(1, std::stoi(gvar->elements[0]))));
+                        scope.push(gvar->var_name, gdAlloc);
+                        break;
+                    }
+                    case Ty_float: {
+                        auto gdAlloc = new GlobalVariable(*TheModule, Type::getFloatTy(TheContext), false,
+                                                          GlobalVariable::LinkageTypes::ExternalLinkage,
+                                                          ConstantFP::get(TheContext,
+                                                                          APFloat(std::stof(gvar->elements[0]))));
+                        scope.push(gvar->var_name, gdAlloc);
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+
+        }
 
         // 2. 对于函数，逐一处理
         if (!node.funcDeclarationList.empty())
@@ -3054,12 +3129,12 @@ int main(int argc, char *argv[]) {
     semantic_analyzer.analyze(*tree);
 
     // X86汇编代码生成.
-    X86_CodeGenerator X86_code_generator;
-    X86_code_generator.X86_code_generate(*tree);
+//    X86_CodeGenerator X86_code_generator;
+//    X86_code_generator.X86_code_generate(*tree);
 
     // LLVM IR代码生成
-//    IR_CodeGenerator IR_code_generator;
-//    IR_code_generator.IR_code_generate(*tree);
+    IR_CodeGenerator IR_code_generator;
+    IR_code_generator.IR_code_generate(*tree);
 
     return 0;
 }
