@@ -42,54 +42,73 @@
 
 
 //float a[4] = {18.1, 15.3, 2.3, 21.1};
-//int main() {
+int a[4] = {18, 15, 2, 21};
+int main() {
 //    int a[4] = {18, 15, 2, 21}; //,76.7, 23.4, 7.9 };
-//    int n=4;  //存放数组a中元素的个数
-//    int i;  //比较的轮数
-//    int j;  //每轮比较的次数
-//    int k;
-//    int buf;  //交换数据时用于存放中间数据
-//
-//    for (i = 0; i < n - 1; i= i+1)  //比较n-1轮
-//    {
-//        for (j = 0; j < n - 1 - i; j=j+1)  //每轮比较n-1-i次,
-//        {
-//            if (a[j] < a[j + 1]) {
-//                buf = a[j];
-//                a[j] = a[j + 1];
-//                a[j + 1] = buf;
-//            }
-//        }
-//    }
-//
-//
-//    return a[0];
-//}
-int b[4] = {28, 25, 22, 17};
-int main(){
-    int a[4] = {18, 15, 2, 21};
-    int n=4;
-    int i;
-    int j;
+    int n=4;  //存放数组a中元素的个数
+    int i;  //比较的轮数
+    int j;  //每轮比较的次数
     int k;
-    int buf;
+    int buf;  //交换数据时用于存放中间数据
 
-    i = 0;
-    while ( i < n - 1  )
+
+
+    for (i = 0; i < n - 1; i= i+1)  //比较n-1轮
     {
-        j = 0;
-        while ( j < n - 1 - i)
+        for (j = 0; j < n - 1 - i; j=j+1)  //每轮比较n-1-i次,
         {
             if (a[j] > a[j + 1]) {
                 buf = a[j];
                 a[j] = a[j + 1];
                 a[j + 1] = buf;
             }
-            j=j+1;
         }
-        i= i+1;
     }
 
-    if (a[0] < a[1]) return 5; else return 2;
-//    return 3;
+    for (i = 0; i < n; i= i+1)  //比较n-1轮
+        print(a[i]);
+
+    return a[0];
 }
+
+
+//int a[4] = {28, 25, 22, 17};
+//int main(){
+//    int a[4] = {18, 15, 2, 21};
+//    int n=4;
+//    int i;
+//    int j;
+//    int k;
+//    int buf;
+//
+//    i = 0;
+//    while ( i < n - 1  )
+//    {
+//        j = 0;
+//        while ( j < n - 1 - i)
+//        {
+//            if (a[j] > a[j + 1]) {
+//                buf = a[j];
+//                a[j] = a[j + 1];
+//                a[j + 1] = buf;
+//            }
+//            j=j+1;
+//        }
+//        i= i+1;
+//    }
+//
+//    if (a[0] < a[1]) return a[0]; else return a[3];
+////    b[1] = 99;
+////    return b[1];
+//}
+
+//int main() {
+//    int i;
+//    for (i =0; i<5; i=i+1)
+//        i = i;
+//
+//    int k;
+//    k =78;
+//
+//    return k;
+//}

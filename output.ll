@@ -1,7 +1,8 @@
 ; ModuleID = 'source.c'
 source_filename = "source.c"
 
-@b = global [4 x i32] [i32 28, i32 25, i32 22, i32 17]
+@a = global [4 x i32] [i32 18, i32 15, i32 2, i32 21]
+@0 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
 
 define i32 @main() {
 entry:
@@ -10,43 +11,28 @@ entry:
   %j = alloca i32, align 4
   %i = alloca i32, align 4
   %n = alloca i32, align 4
-  %0 = alloca [4 x i32], align 4
-  %1 = getelementptr i32, ptr %0, i32 0
-  store i32 18, ptr %1, align 4
-  %2 = getelementptr i32, ptr %0, i32 1
-  store i32 15, ptr %2, align 4
-  %3 = getelementptr i32, ptr %0, i32 2
-  store i32 2, ptr %3, align 4
-  %4 = getelementptr i32, ptr %0, i32 3
-  store i32 21, ptr %4, align 4
   store i32 4, ptr %n, align 4
   store i32 0, ptr %i, align 4
-  br label %while.condition
+  br label %for.condition
 
-while.condition:                                  ; preds = %after-while5, %entry
+for.condition:                                    ; preds = %after.for5, %entry
   %i1 = load i32, ptr %i, align 4
   %n2 = load i32, ptr %n, align 4
   %subtmp = sub i32 %n2, 1
   %cmptemp = icmp ult i32 %i1, %subtmp
   %booltmp = uitofp i1 %cmptemp to double
-  %whilecondition = fcmp one double %booltmp, 0.000000e+00
-  br i1 %whilecondition, label %while.body, label %after-while
+  %forcondition = fcmp one double %booltmp, 0.000000e+00
+  br i1 %forcondition, label %for.body, label %after.for
 
-while.body:                                       ; preds = %while.condition
+for.body:                                         ; preds = %for.condition
   store i32 0, ptr %j, align 4
-  br label %while.condition3
+  br label %for.condition3
 
-after-while:                                      ; preds = %while.condition
-  %5 = getelementptr i32, ptr %0, i32 0
-  %6 = load i32, ptr %5, align 4
-  %7 = getelementptr i32, ptr %0, i32 1
-  %8 = load i32, ptr %7, align 4
-  %cmptemp29 = icmp ult i32 %6, %8
-  %booltmp30 = uitofp i1 %cmptemp29 to double
-  %ifcondition31 = fcmp one double %booltmp30, 0.000000e+00
-  br i1 %ifcondition31, label %if.then, label %if.else
+after.for:                                        ; preds = %for.condition
+  store i32 0, ptr %i, align 4
+  br label %for.condition29
 
-while.condition3:                                 ; preds = %after-if, %while.body
+for.condition3:                                   ; preds = %after-if, %for.body
   %j6 = load i32, ptr %j, align 4
   %n7 = load i32, ptr %n, align 4
   %subtmp8 = sub i32 %n7, 1
@@ -54,56 +40,74 @@ while.condition3:                                 ; preds = %after-if, %while.bo
   %subtmp10 = sub i32 %subtmp8, %i9
   %cmptemp11 = icmp ult i32 %j6, %subtmp10
   %booltmp12 = uitofp i1 %cmptemp11 to double
-  %whilecondition13 = fcmp one double %booltmp12, 0.000000e+00
-  br i1 %whilecondition13, label %while.body4, label %after-while5
+  %forcondition13 = fcmp one double %booltmp12, 0.000000e+00
+  br i1 %forcondition13, label %for.body4, label %after.for5
 
-while.body4:                                      ; preds = %while.condition3
+for.body4:                                        ; preds = %for.condition3
   %j14 = load i32, ptr %j, align 4
-  %9 = getelementptr i32, ptr %0, i32 %j14
-  %10 = load i32, ptr %9, align 4
+  %0 = getelementptr i32, ptr @a, i32 %j14
+  %1 = load i32, ptr %0, align 4
   %j15 = load i32, ptr %j, align 4
   %addtmp = add i32 %j15, 1
-  %11 = getelementptr i32, ptr %0, i32 %addtmp
-  %12 = load i32, ptr %11, align 4
-  %cmptemp16 = icmp ugt i32 %10, %12
+  %2 = getelementptr i32, ptr @a, i32 %addtmp
+  %3 = load i32, ptr %2, align 4
+  %cmptemp16 = icmp ugt i32 %1, %3
   %booltmp17 = uitofp i1 %cmptemp16 to double
   %ifcondition = fcmp one double %booltmp17, 0.000000e+00
   br i1 %ifcondition, label %trueBranch, label %after-if
 
-after-while5:                                     ; preds = %while.condition3
+after.for5:                                       ; preds = %for.condition3
   %i27 = load i32, ptr %i, align 4
   %addtmp28 = add i32 %i27, 1
   store i32 %addtmp28, ptr %i, align 4
-  br label %while.condition
+  br label %for.condition
 
-trueBranch:                                       ; preds = %while.body4
+trueBranch:                                       ; preds = %for.body4
   %j18 = load i32, ptr %j, align 4
-  %13 = getelementptr i32, ptr %0, i32 %j18
-  %14 = load i32, ptr %13, align 4
-  store i32 %14, ptr %buf, align 4
+  %4 = getelementptr i32, ptr @a, i32 %j18
+  %5 = load i32, ptr %4, align 4
+  store i32 %5, ptr %buf, align 4
   %j19 = load i32, ptr %j, align 4
-  %15 = getelementptr i32, ptr %0, i32 %j19
-  %j20 = load i32, ptr %j, align 4
-  %addtmp21 = add i32 %j20, 1
-  %16 = getelementptr i32, ptr %0, i32 %addtmp21
-  %17 = load i32, ptr %16, align 4
-  store i32 %17, ptr %15, align 4
-  %j22 = load i32, ptr %j, align 4
-  %addtmp23 = add i32 %j22, 1
-  %18 = getelementptr i32, ptr %0, i32 %addtmp23
-  %buf24 = load i32, ptr %buf, align 4
-  store i32 %buf24, ptr %18, align 4
+  %addtmp20 = add i32 %j19, 1
+  %6 = getelementptr i32, ptr @a, i32 %addtmp20
+  %7 = load i32, ptr %6, align 4
+  %j21 = load i32, ptr %j, align 4
+  %8 = getelementptr i32, ptr @a, i32 %j21
+  store i32 %7, ptr %8, align 4
+  %buf22 = load i32, ptr %buf, align 4
+  %j23 = load i32, ptr %j, align 4
+  %addtmp24 = add i32 %j23, 1
+  %9 = getelementptr i32, ptr @a, i32 %addtmp24
+  store i32 %buf22, ptr %9, align 4
   br label %after-if
 
-after-if:                                         ; preds = %trueBranch, %while.body4
+after-if:                                         ; preds = %trueBranch, %for.body4
   %j25 = load i32, ptr %j, align 4
   %addtmp26 = add i32 %j25, 1
   store i32 %addtmp26, ptr %j, align 4
-  br label %while.condition3
+  br label %for.condition3
 
-if.then:                                          ; preds = %after-while
-  ret i32 5
+for.condition29:                                  ; preds = %for.body30, %after.for
+  %i32 = load i32, ptr %i, align 4
+  %n33 = load i32, ptr %n, align 4
+  %cmptemp34 = icmp ult i32 %i32, %n33
+  %booltmp35 = uitofp i1 %cmptemp34 to double
+  %forcondition36 = fcmp one double %booltmp35, 0.000000e+00
+  br i1 %forcondition36, label %for.body30, label %after.for31
 
-if.else:                                          ; preds = %after-while
-  ret i32 2
+for.body30:                                       ; preds = %for.condition29
+  %i37 = load i32, ptr %i, align 4
+  %10 = getelementptr i32, ptr @a, i32 %i37
+  %11 = load i32, ptr %10, align 4
+  %12 = call i32 (ptr, ...) @printf(ptr @0, i32 %11)
+  %i38 = load i32, ptr %i, align 4
+  %addtmp39 = add i32 %i38, 1
+  store i32 %addtmp39, ptr %i, align 4
+  br label %for.condition29
+
+after.for31:                                      ; preds = %for.condition29
+  %13 = load i32, ptr @a, align 4
+  ret i32 %13
 }
+
+declare i32 @printf(ptr, ...)

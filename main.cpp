@@ -2468,9 +2468,9 @@ public:
     }
 };
 
-static LLVMContext TheContext;
-static IRBuilder<> Builder(TheContext);
-static std::unique_ptr<Module> TheModule;
+static LLVMContext context;
+static IRBuilder<> Builder(context);
+static std::unique_ptr<Module> module;
 // 即符号表
 Scope scope;
 
@@ -2487,11 +2487,11 @@ public:
     Value *visit(NumLiteral_AST_Node &node) override {
         switch (node.baseType) {
             case Ty_int:
-                return ConstantInt::get(TheContext, APInt(32, std::stoi(node.literal)));
+                return ConstantInt::get(context, APInt(32, std::stoi(node.literal)));
             case Ty_bool:
-                return ConstantInt::get(TheContext, APInt(1, std::stoi(node.literal)));
+                return ConstantInt::get(context, APInt(1, std::stoi(node.literal)));
             case Ty_float:
-                return ConstantFP::get(TheContext, APFloat(std::stof(node.literal)));
+                return ConstantFP::get(context, APFloat(std::stof(node.literal)));
             default:
                 return nullptr;
         }
@@ -2509,20 +2509,30 @@ public:
     Value *visit(Assignment_AST_Node &node) override {
         /* 赋值语句的左值是地址，获取该地址.
          * 该地址在访问SingleVariableDeclaration_AST_Node时已经分配，并记录在符号表中，即scope.
-         * 注意，对于数组（全局与局部有不同吗？），该地址是数组0号元素的地址*/
+         * 注意，对于数组（包括全局与局部），该地址是数组0号元素的地址*/
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.left);
         Value *var = scope.find(v->var_name);
+        Value *value = node.right->accept(*this);
 
-        if (node.type == Ty_array) {
+        if (node.type == Ty_array) { // 数组（包括全局与局部）
             Value* index = v->indexExpression->accept(*this);
-            Type *intTy = Builder.getInt32Ty();
-            Value *elemPtr = Builder.CreateGEP(intTy, var, {index});
-            Value *value = node.right->accept(*this);
+            Value *elemPtr = nullptr;
+            switch (node.baseType) {
+                case Ty_int:
+                    elemPtr = Builder.CreateGEP(Type::getInt32Ty(context), var, {index});
+                    break;
+                case Ty_bool:
+                    elemPtr = Builder.CreateGEP(Type::getInt1Ty(context), var, {index});
+                    break;
+                case Ty_float:
+                    elemPtr = Builder.CreateGEP(Type::getFloatTy(context), var, {index});
+                    break;
+                default:
+                    break;
+            }
             Builder.CreateStore(value, elemPtr);
-
         }
-        else {
-            Value *value = node.right->accept(*this);
+        else { // 非数组.
             return Builder.CreateStore(value, var);
         }
         return nullptr;
@@ -2539,7 +2549,7 @@ public:
         auto righttype = R->getType();
 
         if (lefttype == righttype) {
-            if (lefttype == Type::getInt32Ty(TheContext)) {
+            if (lefttype == Type::getInt32Ty(context)) {
                 if (node.op == TK_PLUS) {
                     return Builder.CreateAdd(L, R, "addtmp");
                 } else if (node.op == TK_MINUS) {
@@ -2550,28 +2560,28 @@ public:
                     return Builder.CreateSDiv(L, R, "dictmp");
                 } else if (node.op == TK_LT) {
                     L = Builder.CreateICmpULT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_GT) {
                     L = Builder.CreateICmpUGT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_LE) {
                     L = Builder.CreateICmpULE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_GE) {
                     L = Builder.CreateICmpUGE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_EQ) {
-                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
-                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
+                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(context));
+                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(context));
                     L = Builder.CreateFCmpUEQ(LF, RF, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_NE) {
-                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(TheContext));
-                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(TheContext));
+                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(context));
+                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(context));
                     L = Builder.CreateFCmpUNE(LF, RF, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 }
-            } else if (lefttype == Type::getFloatTy(TheContext)) {
+            } else if (lefttype == Type::getFloatTy(context)) {
                 if (node.op == TK_PLUS) {
                     return Builder.CreateFAdd(L, R, "addtmp");
                 } else if (node.op == TK_MINUS) {
@@ -2582,22 +2592,22 @@ public:
                     return Builder.CreateFDiv(L, R, "dictmp");
                 } else if (node.op == TK_LT) {
                     L = Builder.CreateFCmpULT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_GT) {
                     L = Builder.CreateFCmpUGT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_LE) {
                     L = Builder.CreateFCmpULE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_GE) {
                     L = Builder.CreateFCmpUGE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_EQ) {
                     L = Builder.CreateFCmpUEQ(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 } else if (node.op == TK_NE) {
                     L = Builder.CreateFCmpUNE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(TheContext), "booltmp");
+                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
                 }
             }
 
@@ -2610,13 +2620,13 @@ public:
         if (!rightValue) return nullptr;
         auto righttype = rightValue->getType();
 
-        if (righttype == Type::getInt32Ty(TheContext)) {
+        if (righttype == Type::getInt32Ty(context)) {
             if (node.op == TK_MINUS) {
-                if (rightValue->getType() == Type::getInt32Ty(TheContext)) {
+                if (rightValue->getType() == Type::getInt32Ty(context)) {
                     return Builder.CreateFPToSI(Builder.CreateFNeg(
-                                                        Builder.CreateSIToFP(rightValue, Type::getFloatTy(TheContext), "int->float"), "neg temp"),
-                                                Type::getInt32Ty(TheContext), "int->float");
-                } else if (rightValue->getType() == Type::getFloatTy(TheContext)) {
+                                                        Builder.CreateSIToFP(rightValue, Type::getFloatTy(context), "int->float"), "neg temp"),
+                                                Type::getInt32Ty(context), "int->float");
+                } else if (rightValue->getType() == Type::getFloatTy(context)) {
                     return Builder.CreateFNeg(rightValue, "neg temp");
                 } else report_error("the operand of \"-\" should be an integer or a float");
             }
@@ -2630,50 +2640,48 @@ public:
 
     Value *visit(SingleVariableDeclaration_AST_Node &node) override {
         Function *func = Builder.GetInsertBlock()->getParent();
-        IRBuilder<> Tmp(&func->getEntryBlock(), func->getEntryBlock().begin());
+        IRBuilder<> TmpBuilder(&func->getEntryBlock(), func->getEntryBlock().begin());
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.varNode);
-        if (node.type == Ty_array) { // 局部变量是数组，创建ArrayType，用于分配数组的空间.
+        if (node.type == Ty_array) { // 局部变量是数组，创建ArrayType，分配数组空间.
             Value *lArrayAlloc = nullptr;
-            ArrayType* arrayType;
+            ArrayType* arrayType = nullptr;
             switch (node.baseType) {
                 case Ty_int:
-                    arrayType = ArrayType::get(Type::getInt32Ty(TheContext), node.inits.size());
-                    lArrayAlloc = Tmp.CreateAlloca(arrayType);
+                    arrayType = ArrayType::get(Type::getInt32Ty(context), node.inits.size());
                     break;
                 case Ty_bool:
-                    arrayType = ArrayType::get(Type::getInt1Ty(TheContext), node.inits.size());
-                    lArrayAlloc = Tmp.CreateAlloca(arrayType);
+                    arrayType = ArrayType::get(Type::getInt1Ty(context), node.inits.size());
                     break;
                 case Ty_float:
-                    arrayType = ArrayType::get(Type::getFloatTy(TheContext), node.inits.size());
-                    lArrayAlloc = Tmp.CreateAlloca(arrayType);
+                    arrayType = ArrayType::get(Type::getFloatTy(context), node.inits.size());
                     break;
                 default:
                     break;
             }
+            lArrayAlloc = TmpBuilder.CreateAlloca(arrayType);
             scope.push(v->var_name, lArrayAlloc);
         } else { // 局部变量非数组
             Type *type;
             Value *value;
             switch (node.baseType) {
                 case Ty_int:
-                    type = Type::getInt32Ty(TheContext);
-                    value = ConstantInt::get(TheContext, APInt(32, 0));
+                    type = Type::getInt32Ty(context);
+                    value = ConstantInt::get(context, APInt(32, 0));
                     break;
                 case Ty_bool:
-                    type = Type::getInt1Ty(TheContext);
-                    value = ConstantInt::get(TheContext, APInt(1, 0));
+                    type = Type::getInt1Ty(context);
+                    value = ConstantInt::get(context, APInt(1, 0));
                     break;
                 case Ty_float:
-                    type = Type::getFloatTy(TheContext);
-                    value = ConstantFP::get(TheContext, APFloat(0.0));
+                    type = Type::getFloatTy(context);
+                    value = ConstantFP::get(context, APFloat(0.0));
                     break;
                 default:
                     type = nullptr;
                     break;
             }
 
-            AllocaInst *allocation = Tmp.CreateAlloca(type, nullptr, v->var_name);
+            AllocaInst *allocation = TmpBuilder.CreateAlloca(type, nullptr, v->var_name);
             scope.push(v->var_name, allocation);
         }
 
@@ -2694,13 +2702,13 @@ public:
         Type *type;
         switch (node.baseType) {
             case Ty_int:
-                type = Type::getInt32Ty(TheContext);
+                type = Type::getInt32Ty(context);
                 break;
             case Ty_bool:
-                type = Type::getInt1Ty(TheContext);
+                type = Type::getInt1Ty(context);
                 break;
             case Ty_float:
-                type = Type::getFloatTy(TheContext);
+                type = Type::getFloatTy(context);
                 break;
             default:
                 type = nullptr;
@@ -2728,24 +2736,24 @@ public:
         Value *condV = node.condition->accept(*this);
         if (!condV) return nullptr;
         // 通过与0或0.0比较，确认将该值转换为bool类型的值.
-        if (condV->getType() == Type::getInt1Ty(TheContext)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "ifcondition");
-        } else if (condV->getType() == Type::getInt32Ty(TheContext)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "ifcondition");
+        if (condV->getType() == Type::getInt1Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(1, 0, false)), "ifcondition");
+        } else if (condV->getType() == Type::getInt32Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(32, 0, false)), "ifcondition");
         } else {
-            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "ifcondition");
+            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(context, APFloat(0.0)), "ifcondition");
         }
 
-        Function *TheFunction = Builder.GetInsertBlock()->getParent();
+        Function *func = Builder.GetInsertBlock()->getParent();
 
         if (node.else_statement != nullptr) { // 有else
-            auto trueBB = BasicBlock::Create(TheContext, "if.then", TheFunction);
-            auto falseBB = BasicBlock::Create(TheContext, "if.else", TheFunction);
-            // 创建after_ifBB基本块时，无需参数TheFunction，
+            auto trueBB = BasicBlock::Create(context, "if.then", func);
+            auto falseBB = BasicBlock::Create(context, "if.else", func);
+            // 创建after_ifBB基本块时，无需参数func，
             // 因为尚不确定在上面两个基本块中是否有return指令.
-            // 若任性加上参数TheFunction，则与后面的after_ifBB->insertInto(TheFunction)冲突
+            // 若任性加上参数func，则与后面的after_ifBB->insertInto(TheFunction)冲突
             // 程序出现异常.
-            auto after_ifBB = BasicBlock::Create(TheContext, "after-if");
+            auto after_ifBB = BasicBlock::Create(context, "after-if");
             Builder.CreateCondBr(condV, trueBB, falseBB);
 
             // trueBB
@@ -2753,7 +2761,7 @@ public:
             node.then_statement->accept(*this); // 插入trueBB基本块的代码.
             int insertedFlag = 0;
             if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
-                after_ifBB->insertInto(TheFunction); // 确定插入after_ifBB.
+                after_ifBB->insertInto(func); // 确定插入after_ifBB.
                 insertedFlag = 1;                    // 设置标志，说明已确定插入
                 Builder.CreateBr(after_ifBB);        // 跳到after_ifBB基本块
             }
@@ -2763,7 +2771,7 @@ public:
             node.else_statement->accept(*this); // 插入falseBB基本块的代码.
             if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
                 if (!insertedFlag) {     // 若尚未决定是否插入after_ifBB.
-                    after_ifBB->insertInto(TheFunction); // 确定插入after_ifBB.
+                    after_ifBB->insertInto(func); // 确定插入after_ifBB.
                     insertedFlag = 1;                    // 设置标志，说明已确定插入.
                 }
                 Builder.CreateBr(after_ifBB); // 跳到after_ifBB基本块
@@ -2771,8 +2779,8 @@ public:
             // 在这里插入after_ifBB基本块代码.
             if (insertedFlag) Builder.SetInsertPoint(after_ifBB);
         } else {  // 没有else部分
-            auto trueBranch = BasicBlock::Create(TheContext, "trueBranch", TheFunction);
-            auto after_ifBB = BasicBlock::Create(TheContext, "after-if", TheFunction);
+            auto trueBranch = BasicBlock::Create(context, "trueBranch", func);
+            auto after_ifBB = BasicBlock::Create(context, "after-if", func);
             Builder.CreateCondBr(condV, trueBranch, after_ifBB);
 
             // trueBB
@@ -2789,38 +2797,38 @@ public:
 
     Value *visit(While_AST_Node &node) override {
         Function *func = Builder.GetInsertBlock()->getParent();
-        BasicBlock *condition = BasicBlock::Create(TheContext, "while.condition", func);
-        BasicBlock *whileBody = BasicBlock::Create(TheContext, "while.body", func);
-        BasicBlock *afterWhile = BasicBlock::Create(TheContext, "after-while", func);
+        BasicBlock *conditionBB = BasicBlock::Create(context, "while.condition", func);
+        BasicBlock *whileBodyBB = BasicBlock::Create(context, "while.body", func);
+        BasicBlock *afterWhileBB = BasicBlock::Create(context, "after.while", func);
 
         if (Builder.GetInsertBlock()->getTerminator() == nullptr)
-            Builder.CreateBr(condition);
+            Builder.CreateBr(conditionBB);
 
-        // Prepare to emit the body of while
-        Builder.SetInsertPoint(condition);
+        // Prepare to emit the condition of while
+        Builder.SetInsertPoint(conditionBB);
         // Emit the code to compute the value of condition.
         Value *condV = node.condition->accept(*this);
         if (!condV)
             return nullptr;
         // condition的值可能是各种类型的值，通过与0或0.0比较，确认将其转换为bool类型的值.
-        if (condV->getType() == Type::getInt1Ty(TheContext)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(1, 0, false)), "whilecondition");
-        } else if (condV->getType() == Type::getInt32Ty(TheContext)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(TheContext, APInt(32, 0, false)), "whilecondition");
+        if (condV->getType() == Type::getInt1Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(1, 0, false)), "whilecondition");
+        } else if (condV->getType() == Type::getInt32Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(32, 0, false)), "whilecondition");
         } else {
-            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(TheContext, APFloat(0.0)), "whilecondition");
+            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(context, APFloat(0.0)), "whilecondition");
         }
-        Builder.CreateCondBr(condV, whileBody, afterWhile);
+        Builder.CreateCondBr(condV, whileBodyBB, afterWhileBB);
 
         // Prepare to emit the body of while
-        Builder.SetInsertPoint(whileBody);
-        // Emit the body of
+        Builder.SetInsertPoint(whileBodyBB);
+        // Emit the body of while
         node.statement->accept(*this);
         if (Builder.GetInsertBlock()->getTerminator() == nullptr)
-            Builder.CreateBr(condition);
+            Builder.CreateBr(conditionBB);
 
         // Prepare to emit the code after while
-        Builder.SetInsertPoint(afterWhile);
+        Builder.SetInsertPoint(afterWhileBB);
 
         return nullptr;
     }
@@ -2830,6 +2838,46 @@ public:
     }
 
     Value *visit(For_AST_Node &node) override {
+        Function *func = Builder.GetInsertBlock()->getParent();
+        BasicBlock *conditionBB = BasicBlock::Create(context, "for.condition", func);
+        BasicBlock *forBodyBB = BasicBlock::Create(context, "for.body", func);
+        BasicBlock *afterForBB = BasicBlock::Create(context, "after.for", func);
+
+        // Emit the part of initialization
+        node.initialization->accept(*this);
+
+        if (Builder.GetInsertBlock()->getTerminator() == nullptr)
+            Builder.CreateBr(conditionBB);
+
+        // Prepare to emit the condition of for
+        Builder.SetInsertPoint(conditionBB);
+        // Emit the code to compute the value of condition.
+        Value *condV = node.condition->accept(*this);
+        if (!condV)
+            return nullptr;
+        // condition的值可能是各种类型的值，通过与0或0.0比较，确认将其转换为bool类型的值.
+        if (condV->getType() == Type::getInt1Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(1, 0, false)), "forcondition");
+        } else if (condV->getType() == Type::getInt32Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(32, 0, false)), "forcondition");
+        } else {
+            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(context, APFloat(0.0)), "forcondition");
+        }
+        Builder.CreateCondBr(condV, forBodyBB, afterForBB);
+
+        // Prepare to emit the body of for
+        Builder.SetInsertPoint(forBodyBB);
+        // Emit the body of for
+        node.statement->accept(*this);
+        // Emit the increment of for
+        node.increment->accept(*this);
+
+        if (Builder.GetInsertBlock()->getTerminator() == nullptr)
+            Builder.CreateBr(conditionBB);
+
+        // Prepare to emit the code after while
+        Builder.SetInsertPoint(afterForBB);
+
         return nullptr;
     }
 
@@ -2842,11 +2890,26 @@ public:
     }
 
     Value *visit(Print_AST_Node &node) override {
+        // Define the printf function signature
+        std::vector<llvm::Type*> printf_arg_types = {Builder.getInt8PtrTy()};
+        llvm::FunctionType* printf_type = llvm::FunctionType::get(Builder.getInt32Ty(), printf_arg_types, true);
+        llvm::FunctionCallee printf_func = module->getOrInsertFunction("printf", printf_type);
+
+        if (node.value->type == Ty_array) {
+            auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.value);
+            Value* index = v->indexExpression->accept(*this);
+            Type *intTy = Builder.getInt32Ty();
+            Value *var = scope.find(v->var_name);
+            Value *elemPtr = Builder.CreateGEP(intTy, var, {index});
+            llvm::Value* element = Builder.CreateLoad(intTy, elemPtr);
+            Builder.CreateCall(printf_func, {Builder.CreateGlobalStringPtr("%d\n"), element});
+        }
+
         return nullptr;
     }
 
     Value *visit(FunctionCall_AST_Node &node) override {
-        Function *callerFunc = TheModule->getFunction(node.funcName);
+        Function *callerFunc = module->getFunction(node.funcName);
         if (callerFunc == nullptr) {
             exit(0);
         } else {
@@ -2865,13 +2928,13 @@ public:
         Value *pAlloc;
         switch (node.baseType) {
             case Ty_int:
-                pAlloc = Builder.CreateAlloca(Type::getInt32Ty(TheContext));
+                pAlloc = Builder.CreateAlloca(Type::getInt32Ty(context));
                 break;
             case Ty_bool:
-                pAlloc = Builder.CreateAlloca(Type::getInt1Ty(TheContext));
+                pAlloc = Builder.CreateAlloca(Type::getInt1Ty(context));
                 break;
             case Ty_float:
-                pAlloc = Builder.CreateAlloca(Type::getFloatTy(TheContext));
+                pAlloc = Builder.CreateAlloca(Type::getFloatTy(context));
                 break;
             default:
                 pAlloc = nullptr;
@@ -2888,16 +2951,16 @@ public:
         Type *return_type;
         switch (node.funcType->type) {
             case Ty_int:
-                return_type = Type::getInt32Ty(TheContext);
+                return_type = Type::getInt32Ty(context);
                 break;
             case Ty_bool:
-                return_type = Type::getInt1Ty(TheContext);
+                return_type = Type::getInt1Ty(context);
                 break;
             case Ty_float:
-                return_type = Type::getFloatTy(TheContext);
+                return_type = Type::getFloatTy(context);
                 break;
             default:  // i.e., Ty_void
-                return_type = Type::getVoidTy(TheContext);
+                return_type = Type::getVoidTy(context);
         }
 
         // 形参类型
@@ -2906,13 +2969,13 @@ public:
             for (auto &each: node.formalParams) {
                 switch (each->type) {
                     case Ty_int:
-                        parameterTypes.push_back(Type::getInt32Ty(TheContext));
+                        parameterTypes.push_back(Type::getInt32Ty(context));
                         break;
                     case Ty_bool:
-                        parameterTypes.push_back(Type::getInt1Ty(TheContext));
+                        parameterTypes.push_back(Type::getInt1Ty(context));
                         break;
                     case Ty_float:
-                        parameterTypes.push_back(Type::getFloatTy(TheContext));
+                        parameterTypes.push_back(Type::getFloatTy(context));
                         break;
                     default:
                         break;
@@ -2926,7 +2989,7 @@ public:
         Function *F = Function::Create(FunctionType,
                                        Function::ExternalLinkage,
                                        node.funcName,
-                                       TheModule.get());
+                                       module.get());
         return F;
     }
 
@@ -2945,7 +3008,7 @@ public:
         // 准备构建函数体
         scope.enter_new();  // enter current function scope
 
-        BasicBlock *basicblock = BasicBlock::Create(TheContext, "entry", f);
+        BasicBlock *basicblock = BasicBlock::Create(context, "entry", f);
         Builder.SetInsertPoint(basicblock);
 
         // 在函数栈帧为各个参数开辟空间
@@ -2987,61 +3050,59 @@ public:
         scope.enter_new(); // enter global scope
         for (auto &gvar: globals) {
             if (gvar->type == Ty_array) {
+                Type *element_type = nullptr;
                 switch (gvar->baseType) {
-                    case Ty_int: {
-                        // 创建数组类型
-                        ArrayType *arrayType = ArrayType::get(Type::getInt32Ty(TheContext), gvar->elements.size());
-                        // 声明全局数组
-                        auto gdAlloc = new GlobalVariable(*TheModule, arrayType, false,
-                                                                         GlobalValue::LinkageTypes::ExternalLinkage,
-                                                                         ConstantAggregateZero::get(arrayType),
-                                                                         gvar->var_name);
-
-                        // 初始化常量数组
-                        std::vector<Constant *> elements;
-                        for (auto &e: gvar->elements) {
-                            elements.push_back(ConstantInt::get(Type::getInt32Ty(TheContext), std::stoi(e)));
-                        }
-                        Constant *arrayInitializer = ConstantArray::get(arrayType, elements);
-                        gdAlloc->setInitializer(arrayInitializer);
-
-                        scope.push(gvar->var_name, gdAlloc);
+                    case Ty_int:
+                        element_type = Type::getInt32Ty(context);
                         break;
-                    }
-//                    case Ty_bool:
-//                        arrayType = ArrayType::get(Type::getInt1Ty(TheContext), gvar->elements.size());
-//                        break;
-//                    case Ty_float:
-//                        arrayType = ArrayType::get(Type::getFloatTy(TheContext), gvar->elements.size());
-//                        break;
+                    case Ty_bool:
+                        element_type = Type::getInt1Ty(context);
+                        break;
+                    case Ty_float:
+                        element_type = Type::getFloatTy(context);
+                        break;
                     default:
                         break;
                 }
+                // 创建全局数组类型，这与创建局部数组类型方式完全一致.
+                ArrayType *arrayType = ArrayType::get(element_type, gvar->elements.size());
+                // 声明全局数组
+                auto gdAlloc = new GlobalVariable(*module, arrayType, false,
+                                                  GlobalValue::LinkageTypes::ExternalLinkage,
+                                                  ConstantAggregateZero::get(arrayType),
+                                                  gvar->var_name);
+                // 初始化全局常量数组
+                std::vector<Constant *> elements;
+                for (auto &e: gvar->elements) {
+                    elements.push_back(ConstantInt::get(element_type, std::stoi(e)));
+                }
+                Constant *arrayInitializer = ConstantArray::get(arrayType, elements);
+                gdAlloc->setInitializer(arrayInitializer);
 
-
+                scope.push(gvar->var_name, gdAlloc);
             } else {
                 switch (gvar->baseType) {
                     case Ty_int: {
-                        auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt32Ty(TheContext), false,
+                        auto gdAlloc = new GlobalVariable(*module, Type::getInt32Ty(context), false,
                                                           GlobalVariable::LinkageTypes::ExternalLinkage,
-                                                          ConstantInt::get(TheContext,
+                                                          ConstantInt::get(context,
                                                                            APInt(32, std::stoi(gvar->elements[0]))));
                         scope.push(gvar->var_name, gdAlloc);
                         break;
                     }
                     case Ty_bool: {
-                        ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(TheContext));
-                        auto gdAlloc = new GlobalVariable(*TheModule, Type::getInt1Ty(TheContext), false,
+                        ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(context));
+                        auto gdAlloc = new GlobalVariable(*module, Type::getInt1Ty(context), false,
                                                           GlobalVariable::LinkageTypes::ExternalLinkage,
-                                                          ConstantInt::get(TheContext,
+                                                          ConstantInt::get(context,
                                                                            APInt(1, std::stoi(gvar->elements[0]))));
                         scope.push(gvar->var_name, gdAlloc);
                         break;
                     }
                     case Ty_float: {
-                        auto gdAlloc = new GlobalVariable(*TheModule, Type::getFloatTy(TheContext), false,
+                        auto gdAlloc = new GlobalVariable(*module, Type::getFloatTy(context), false,
                                                           GlobalVariable::LinkageTypes::ExternalLinkage,
-                                                          ConstantFP::get(TheContext,
+                                                          ConstantFP::get(context,
                                                                           APFloat(std::stof(gvar->elements[0]))));
                         scope.push(gvar->var_name, gdAlloc);
                         break;
@@ -3050,7 +3111,6 @@ public:
                         break;
                 }
             }
-
         }
 
         // 2. 对于函数，逐一处理
@@ -3065,9 +3125,9 @@ public:
 
 void IR_CodeGenerator::IR_code_generate(AST_Node &tree) {
     // Prepare the module, which holds all the SSA code.
-    TheModule = std::make_unique<Module>("source.c", TheContext);
+    module = std::make_unique<Module>("source.c", context);
 
-    // 遍历AST，填充TheModule
+    // 遍历AST，填充module
     tree.accept(*this);
 
     auto Filename = "output.ll";
@@ -3077,7 +3137,7 @@ void IR_CodeGenerator::IR_code_generate(AST_Node &tree) {
         errs() << "Could not open file: " << EC.message();
         return;
     }
-    TheModule->print(dest, nullptr);
+    module->print(dest, nullptr);
 }
 
 
