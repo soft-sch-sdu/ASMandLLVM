@@ -1,17 +1,17 @@
 ; ModuleID = 'source.c'
 source_filename = "source.c"
 
-@a = global [4 x i32] [i32 18, i32 15, i32 2, i32 21]
-@0 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
+@a = global [6 x float] [float 0x40321999A0000000, float 0x402E9999A0000000, float 0x4002666660000000, float 0x40351999A0000000, float 0x4040B33340000000, float 0x4000CCCCC0000000]
+@0 = private unnamed_addr constant [7 x i8] c"%0.2f\0A\00", align 1
 
 define i32 @main() {
 entry:
-  %buf = alloca i32, align 4
+  %buf = alloca float, align 4
   %k = alloca i32, align 4
   %j = alloca i32, align 4
   %i = alloca i32, align 4
   %n = alloca i32, align 4
-  store i32 4, ptr %n, align 4
+  store i32 6, ptr %n, align 4
   store i32 0, ptr %i, align 4
   br label %for.condition
 
@@ -45,13 +45,13 @@ for.condition3:                                   ; preds = %after-if, %for.body
 
 for.body4:                                        ; preds = %for.condition3
   %j14 = load i32, ptr %j, align 4
-  %0 = getelementptr i32, ptr @a, i32 %j14
-  %1 = load i32, ptr %0, align 4
+  %0 = getelementptr float, ptr @a, i32 %j14
+  %1 = load float, ptr %0, align 4
   %j15 = load i32, ptr %j, align 4
   %addtmp = add i32 %j15, 1
-  %2 = getelementptr i32, ptr @a, i32 %addtmp
-  %3 = load i32, ptr %2, align 4
-  %cmptemp16 = icmp ugt i32 %1, %3
+  %2 = getelementptr float, ptr @a, i32 %addtmp
+  %3 = load float, ptr %2, align 4
+  %cmptemp16 = fcmp ult float %1, %3
   %booltmp17 = uitofp i1 %cmptemp16 to double
   %ifcondition = fcmp one double %booltmp17, 0.000000e+00
   br i1 %ifcondition, label %trueBranch, label %after-if
@@ -64,21 +64,21 @@ after.for5:                                       ; preds = %for.condition3
 
 trueBranch:                                       ; preds = %for.body4
   %j18 = load i32, ptr %j, align 4
-  %4 = getelementptr i32, ptr @a, i32 %j18
-  %5 = load i32, ptr %4, align 4
-  store i32 %5, ptr %buf, align 4
+  %4 = getelementptr float, ptr @a, i32 %j18
+  %5 = load float, ptr %4, align 4
+  store float %5, ptr %buf, align 4
   %j19 = load i32, ptr %j, align 4
   %addtmp20 = add i32 %j19, 1
-  %6 = getelementptr i32, ptr @a, i32 %addtmp20
-  %7 = load i32, ptr %6, align 4
+  %6 = getelementptr float, ptr @a, i32 %addtmp20
+  %7 = load float, ptr %6, align 4
   %j21 = load i32, ptr %j, align 4
-  %8 = getelementptr i32, ptr @a, i32 %j21
-  store i32 %7, ptr %8, align 4
-  %buf22 = load i32, ptr %buf, align 4
+  %8 = getelementptr float, ptr @a, i32 %j21
+  store float %7, ptr %8, align 4
+  %buf22 = load float, ptr %buf, align 4
   %j23 = load i32, ptr %j, align 4
   %addtmp24 = add i32 %j23, 1
-  %9 = getelementptr i32, ptr @a, i32 %addtmp24
-  store i32 %buf22, ptr %9, align 4
+  %9 = getelementptr float, ptr @a, i32 %addtmp24
+  store float %buf22, ptr %9, align 4
   br label %after-if
 
 after-if:                                         ; preds = %trueBranch, %for.body4
@@ -97,17 +97,17 @@ for.condition29:                                  ; preds = %for.body30, %after.
 
 for.body30:                                       ; preds = %for.condition29
   %i37 = load i32, ptr %i, align 4
-  %10 = getelementptr i32, ptr @a, i32 %i37
-  %11 = load i32, ptr %10, align 4
-  %12 = call i32 (ptr, ...) @printf(ptr @0, i32 %11)
+  %10 = getelementptr float, ptr @a, i32 %i37
+  %11 = load float, ptr %10, align 4
+  %12 = fpext float %11 to double
+  %13 = call i32 (ptr, ...) @printf(ptr @0, double %12)
   %i38 = load i32, ptr %i, align 4
   %addtmp39 = add i32 %i38, 1
   store i32 %addtmp39, ptr %i, align 4
   br label %for.condition29
 
 after.for31:                                      ; preds = %for.condition29
-  %13 = load i32, ptr @a, align 4
-  ret i32 %13
+  ret i32 0
 }
 
 declare i32 @printf(ptr, ...)

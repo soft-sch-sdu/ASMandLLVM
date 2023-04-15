@@ -2716,9 +2716,19 @@ public:
         }
         if (node.type == Ty_array) {
             Value* index = node.indexExpression->accept(*this);
-            Type *intTy = Builder.getInt32Ty();
-            Value *elemPtr = Builder.CreateGEP(intTy, var, {index});
-            return Builder.CreateLoad(intTy, elemPtr);
+            Type *value_type = nullptr;
+            switch (node.baseType) {
+                case Ty_int:
+                    value_type =Type::getInt32Ty(context);
+                    break;
+                case Ty_float:
+                    value_type = Type::getFloatTy(context);
+                    break;
+                default:
+                    break;
+            }
+            Value *elemPtr = Builder.CreateGEP(value_type, var, {index});
+            return Builder.CreateLoad(value_type, elemPtr);
         }
         return Builder.CreateLoad(type, var, node.var_name);
     }
@@ -2891,19 +2901,27 @@ public:
 
     Value *visit(Print_AST_Node &node) override {
         // Define the printf function signature
-        std::vector<llvm::Type*> printf_arg_types = {Builder.getInt8PtrTy()};
-        llvm::FunctionType* printf_type = llvm::FunctionType::get(Builder.getInt32Ty(), printf_arg_types, true);
-        llvm::FunctionCallee printf_func = module->getOrInsertFunction("printf", printf_type);
+        std::vector<Type*> printf_arg_types = {Builder.getInt8PtrTy()};
+        FunctionType* printf_type = FunctionType::get(Type::getInt32Ty(context), printf_arg_types, true);
+        FunctionCallee printf_func = module->getOrInsertFunction("printf", printf_type);
 
-        if (node.value->type == Ty_array) {
-            auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.value);
-            Value* index = v->indexExpression->accept(*this);
-            Type *intTy = Builder.getInt32Ty();
-            Value *var = scope.find(v->var_name);
-            Value *elemPtr = Builder.CreateGEP(intTy, var, {index});
-            llvm::Value* element = Builder.CreateLoad(intTy, elemPtr);
-            Builder.CreateCall(printf_func, {Builder.CreateGlobalStringPtr("%d\n"), element});
+        // 获取print对象的值
+        Value* element = node.value->accept(*this);
+        Constant *formatStr = nullptr;
+        switch (node.value->baseType) {
+            case Ty_int:
+                formatStr = Builder.CreateGlobalStringPtr("%d\n");
+                break;
+            case Ty_float:
+                formatStr = Builder.CreateGlobalStringPtr("%0.2f\n");
+                //必须将float转成double类型
+                element = Builder.CreateFPExt(element, Type::getDoubleTy(context));
+                break;
+            default:
+                break;
         }
+
+        Builder.CreateCall(printf_func, {formatStr, element});
 
         return nullptr;
     }
@@ -3048,69 +3066,74 @@ public:
         // 1. 对于全局变量，已经在语义分析阶段将其信息导入globals，
         //    故无需遍历全局变量List，而只需根据globals处理
         scope.enter_new(); // enter global scope
+        GlobalVariable* gdAlloc = nullptr;
         for (auto &gvar: globals) {
-            if (gvar->type == Ty_array) {
+            if (gvar->type == Ty_array) { // 数组全局变量.
                 Type *element_type = nullptr;
+                std::vector<Constant *> array_elements;
                 switch (gvar->baseType) {
                     case Ty_int:
                         element_type = Type::getInt32Ty(context);
+                        for (auto &e: gvar->elements) {
+                            array_elements.push_back(ConstantInt::get(element_type, std::stoi(e)));
+                        }
                         break;
                     case Ty_bool:
                         element_type = Type::getInt1Ty(context);
+                        for (auto &e: gvar->elements) {
+                            array_elements.push_back(ConstantInt::get(element_type, std::stoi(e)));
+                        }
                         break;
                     case Ty_float:
                         element_type = Type::getFloatTy(context);
+                        for (auto &e: gvar->elements) {
+                            array_elements.push_back(ConstantFP::get(element_type, std::stof(e)));
+                        }
                         break;
                     default:
                         break;
                 }
                 // 创建全局数组类型，这与创建局部数组类型方式完全一致.
                 ArrayType *arrayType = ArrayType::get(element_type, gvar->elements.size());
+                // 初始化全局常量数组
+                Constant *arrayInitializer = ConstantArray::get(arrayType, array_elements);
                 // 声明全局数组
-                auto gdAlloc = new GlobalVariable(*module, arrayType, false,
+                gdAlloc = new GlobalVariable(*module, arrayType, false,
                                                   GlobalValue::LinkageTypes::ExternalLinkage,
                                                   ConstantAggregateZero::get(arrayType),
                                                   gvar->var_name);
-                // 初始化全局常量数组
-                std::vector<Constant *> elements;
-                for (auto &e: gvar->elements) {
-                    elements.push_back(ConstantInt::get(element_type, std::stoi(e)));
-                }
-                Constant *arrayInitializer = ConstantArray::get(arrayType, elements);
-                gdAlloc->setInitializer(arrayInitializer);
 
-                scope.push(gvar->var_name, gdAlloc);
-            } else {
+                gdAlloc->setInitializer(arrayInitializer);
+            }
+            else { // 非数组全局变量.
                 switch (gvar->baseType) {
                     case Ty_int: {
-                        auto gdAlloc = new GlobalVariable(*module, Type::getInt32Ty(context), false,
+                        gdAlloc = new GlobalVariable(*module, Type::getInt32Ty(context), false,
                                                           GlobalVariable::LinkageTypes::ExternalLinkage,
                                                           ConstantInt::get(context,
                                                                            APInt(32, std::stoi(gvar->elements[0]))));
-                        scope.push(gvar->var_name, gdAlloc);
                         break;
                     }
                     case Ty_bool: {
                         ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(context));
-                        auto gdAlloc = new GlobalVariable(*module, Type::getInt1Ty(context), false,
+                        gdAlloc = new GlobalVariable(*module, Type::getInt1Ty(context), false,
                                                           GlobalVariable::LinkageTypes::ExternalLinkage,
                                                           ConstantInt::get(context,
                                                                            APInt(1, std::stoi(gvar->elements[0]))));
-                        scope.push(gvar->var_name, gdAlloc);
                         break;
                     }
                     case Ty_float: {
-                        auto gdAlloc = new GlobalVariable(*module, Type::getFloatTy(context), false,
+                        gdAlloc = new GlobalVariable(*module, Type::getFloatTy(context), false,
                                                           GlobalVariable::LinkageTypes::ExternalLinkage,
                                                           ConstantFP::get(context,
                                                                           APFloat(std::stof(gvar->elements[0]))));
-                        scope.push(gvar->var_name, gdAlloc);
                         break;
                     }
                     default:
                         break;
                 }
             }
+            scope.push(gvar->var_name, gdAlloc);
         }
 
         // 2. 对于函数，逐一处理
