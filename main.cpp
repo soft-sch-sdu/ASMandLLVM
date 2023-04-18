@@ -16,7 +16,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
-using namespace llvm::sys;
+using namespace sys;
 
 /************************************************/
 
@@ -653,17 +653,10 @@ public:
 /// NumLiteral_AST_Node - 整数、浮点数、布尔常量的字面量
 class NumLiteral_AST_Node : public AST_Node {
 public:
-    std::string literal;
+//    std::string literal;
+    TOKEN token;
 
-    explicit NumLiteral_AST_Node(TOKEN &tok) : literal(tok.lexeme) {
-        if (tok.type == TK_INT_LITERAL) type = Ty_int;
-        else if (tok.type == TK_FLOAT_LITERAL) type = Ty_float;
-        else if (tok.type == TK_BOOL_LITERAL) {
-            type = Ty_bool;
-            if (std::string(literal) == std::string("true")) literal = "1";
-            else literal = "0";
-        } else if (tok.type == TK_CHAR_LITERAL) type = Ty_char;
-    }
+    explicit NumLiteral_AST_Node(TOKEN &tok) : token(tok) {}
 
     Value *accept(Visitor &v) override {
         return v.visit(*this);
@@ -764,7 +757,6 @@ public:
 /// break语句对应的结点
 class Break_AST_Node : public AST_Node {
 public:
-    std::string break_label;
 
     Value *accept(Visitor &v) override {
         return v.visit(*this);
@@ -774,7 +766,6 @@ public:
 /// continue语句对应的结点
 class Continue_AST_Node : public AST_Node {
 public:
-    std::string continue_label;
 
     Value *accept(Visitor &v) override {
         return v.visit(*this);
@@ -988,6 +979,8 @@ private:
 
     std::shared_ptr<AST_Node> equality();
 
+    std::shared_ptr<AST_Node> logic();
+
     std::shared_ptr<AST_Node> expression();
 
     std::shared_ptr<AST_Node> expression_statement();
@@ -1156,9 +1149,25 @@ std::shared_ptr<AST_Node> Parser::equality() {
     }
 }
 
-// expression  :=  equality ("=" expression)?
-std::shared_ptr<AST_Node> Parser::expression() {
+// logic  :=  equality ("&&" equality | "||" equality)*
+std::shared_ptr<AST_Node> Parser::logic() {
     auto node = equality();
+    while (true) {
+        if (CurrentToken.type == TK_AND || CurrentToken.type == TK_OR) {
+            TOKEN op_token = CurrentToken;
+            eatCurrentToken();
+            auto left = std::move(node);
+            node = std::make_shared<BinaryOperator_AST_Node>(std::move(left), op_token.type,
+                                                             std::move(equality()));
+            continue;
+        }
+        return node;
+    }
+}
+
+// expression  :=  logic ("=" expression)?
+std::shared_ptr<AST_Node> Parser::expression() {
+    auto node = logic();
     if (CurrentToken.type == TK_ASSIGN) {
         TOKEN assign_token = CurrentToken;
         eatCurrentToken();
@@ -1522,7 +1531,8 @@ std::shared_ptr<AST_Node> Parser::program() {
  * declarator  :=  identifier type-suffix
  * type-suffix  :=  ϵ | ("[" num_literal "]")?
  * expression_statement  :=  expression? ";"
- * expression  :=  equality ("=" expression)?
+ * expression  :=  logic ("=" expression)?
+ * logic  :=  equality ("&&" equality | "||" equality)*
  * equality  :=  relational ("==" relational | "!=" relational)*
  * relational  :=  add_sub ("<" add_sub | "<=" add_sub | ">" add_sub | ">=" add_sub)*
  * add_sub  :=  mul_div ("+" mul_div | "-" mul_div)*
@@ -1553,7 +1563,11 @@ public:
     }
 
     Value *visit(NumLiteral_AST_Node &node) override {
-        node.baseType = node.type;
+        if (node.token.type == TK_INT_LITERAL) node.baseType = Ty_int;
+        else if (node.token.type == TK_FLOAT_LITERAL) node.baseType = Ty_float;
+        else if (node.token.type == TK_BOOL_LITERAL) node.baseType = Ty_bool;
+        else if (node.token.type == TK_CHAR_LITERAL) node.baseType = Ty_char;
+        node.type = node.baseType;
         return nullptr;
     }
 
@@ -1585,7 +1599,7 @@ public:
         }
         // 类型不一致，则为用户提供warning信息，并记录实际返回值类型.
         if (node.baseType != functionSymbol->type)
-            fprintf(stderr, "type returned does not match the type of function \"%s\".\n", node.functionName.c_str());
+            fprintf(stderr, "Warning: type returned does not match the type of function \"%s\".\n", node.functionName.c_str());
 
         // 类型转换也可以放在visit BinaryOperation的时候进行.
         // 下面这种不一致有点严重，退出.
@@ -1607,11 +1621,16 @@ public:
     Value *visit(BinaryOperator_AST_Node &node) override {
         node.left->accept(*this);
         node.right->accept(*this);
-        // 检查运算数是否兼容.
-        Ty left_Type = node.left->baseType;
-        Ty right_Type = node.right->baseType;
-        // 若兼容，取大，即bool < char < int < float
-        node.baseType = (left_Type > right_Type) ? left_Type : right_Type;
+        if (node.op == TK_LT || node.op == TK_LE || node.op == TK_GT || node.op == TK_GE || node.op == TK_AND || node.op == TK_OR || node.op == TK_EQ || node.op == TK_NE)
+        {
+            node.type = node.baseType = Ty_bool;
+        } else {
+            // 检查运算数是否兼容.
+            Ty left_Type = node.left->baseType;
+            Ty right_Type = node.right->baseType;
+            // 若兼容，取大，即bool < char < int < float
+            node.baseType = (left_Type > right_Type) ? left_Type : right_Type;
+        }
         return nullptr;
     }
 
@@ -1650,7 +1669,7 @@ public:
                                                               0, currentScope->level);
                 for (auto &ele: node.inits) {
                     std::string initValueLiteral = std::dynamic_pointer_cast<NumLiteral_AST_Node>(
-                            std::dynamic_pointer_cast<Assignment_AST_Node>(ele)->right)->literal;
+                            std::dynamic_pointer_cast<Assignment_AST_Node>(ele)->right)->token.lexeme;
                     varNode->elements.push_back(initValueLiteral);
                 }
 
@@ -1719,8 +1738,14 @@ public:
     }
 
     Value *visit(If_AST_Node &node) override {
-        if (node.condition != nullptr)
+        if (node.condition != nullptr) {
             node.condition->accept(*this);
+            if (node.condition->baseType != Ty_bool)
+                report_error("Condition in if should be a bool value!");
+        } else {
+            report_error("if statement has a null condition!");
+        }
+
         if (node.then_statement != nullptr)
             node.then_statement->accept(*this);
         if (node.else_statement != nullptr)
@@ -1729,8 +1754,14 @@ public:
     }
 
     Value *visit(While_AST_Node &node) override {
-        if (node.condition != nullptr)
+        if (node.condition != nullptr) {
             node.condition->accept(*this);
+            if (node.condition->baseType != Ty_bool)
+                report_error("Condition in while should be a bool value!");
+        } else {
+            report_error("while statement has a null condition!");
+        }
+
         if (node.statement != nullptr)
             node.statement->accept(*this);
         return nullptr;
@@ -1740,8 +1771,13 @@ public:
     Value *visit(DoWhile_AST_Node &node) override {
         if (node.statement != nullptr)
             node.statement->accept(*this);
-        if (node.condition != nullptr)
+        if (node.condition != nullptr) {
             node.condition->accept(*this);
+            if (node.condition->baseType != Ty_bool)
+                report_error("Condition in do-while should be a bool value!");
+        } else {
+            report_error("do-while statement has a null condition!");
+        }
         return nullptr;
     }
 
@@ -1749,7 +1785,13 @@ public:
         if (node.initialization != nullptr)
             node.initialization->accept(*this);
 
-        node.condition->accept(*this);
+        if (node.condition != nullptr) {
+            node.condition->accept(*this);
+            if (node.condition->baseType != Ty_bool)
+                report_error("Condition in for should be a bool value!");
+        } else {
+            report_error("for statement has a null condition!");
+        }
 
         if (node.increment != nullptr)
             node.increment->accept(*this);
@@ -1770,7 +1812,7 @@ public:
     Value *visit(FunctionCall_AST_Node &node) override {
         std::shared_ptr<Symbol> functionSymbol = currentScope->lookup(node.funcName, false);
         if (functionSymbol == nullptr) {
-            fprintf(stderr, "something wrong!!!\n");
+            report_error("something wrong!!!\n");
             exit(1);
         }
         node.type = node.baseType = functionSymbol->type;
@@ -1884,21 +1926,21 @@ public:
 
     Value *visit(NumLiteral_AST_Node &node) override {
         if (node.baseType == Ty_int)
-            std::cout << "    mov $" << node.literal << ", %rax\n";
+            std::cout << "    mov $" << node.token.lexeme << ", %rax\n";
         else if (node.baseType == Ty_float) {
             union {
                 double f64;
                 uint64_t u64;
             } u{};
-            u.f64 = strtod(node.literal.c_str(), nullptr);
+            u.f64 = strtod(node.token.lexeme.c_str(), nullptr);
             std::cout << "    mov $" << u.u64 << ", %rax   # float " << u.f64 << "\n";
             std::cout << "    movq %rax, %xmm0\n";
         } else if (node.baseType == Ty_bool) {
             // 类似c语言，true用整数1表示，flase用整数0表示.
-            if (node.literal == "1") std::cout << "    mov $1, %rax\n";
+            if (node.token.lexeme == "1") std::cout << "    mov $1, %rax\n";
             else std::cout << "    mov $0, %rax\n";
         } else if (node.baseType == Ty_char) {
-            char c = node.literal.front();
+            char c = node.token.lexeme.front();
             std::cout << "    mov $" << (int) c << ", %rax   # char " << "\n";
         }
         return nullptr;
@@ -2026,19 +2068,19 @@ public:
                             break;
                         case TK_LT:
                             std::cout << "    movq $1, %rcx" << std::endl;
-                            std::cout << "    cmovb %rcx, %rax" << std::endl;
+                            std::cout << "    cmova %rcx, %rax" << std::endl;
                             break;
                         case TK_LE:
                             std::cout << "    movq $1, %rcx" << std::endl;
-                            std::cout << "    cmovbe %rcx, %rax" << std::endl;
+                            std::cout << "    cmovae %rcx, %rax" << std::endl;
                             break;
                         case TK_GT:
                             std::cout << "    movq $1, %rcx" << std::endl;
-                            std::cout << "    cmova %rcx, %rax" << std::endl;
+                            std::cout << "    cmovb %rcx, %rax" << std::endl;
                             break;
                         case TK_GE:
                             std::cout << "    movq $1, %rcx" << std::endl;
-                            std::cout << "    cmovae %rcx, %rax" << std::endl;
+                            std::cout << "    cmovbe %rcx, %rax" << std::endl;
                             break;
                         default:
                             break;
@@ -2262,6 +2304,11 @@ public:
     Value *visit(DoWhile_AST_Node &node) override {
         auto_label_no += 1;
         std::string auto_label = std::to_string(auto_label_no);
+        std::string previous_break_label = current_break_label;
+        std::string previous_continue_label = current_continue_label;
+        current_break_label = ".L.end." + auto_label;
+        current_continue_label = ".L.condition." + auto_label;
+
 
         std::cout << ".L.do." << auto_label << ":\n";
         node.statement->accept(*this);
@@ -2271,6 +2318,9 @@ public:
         std::cout << "    je  .L.end." << auto_label << std::endl;
         std::cout << "    jmp  .L.do." << auto_label << std::endl;
         std::cout << ".L.end." << auto_label << ":\n";
+
+        current_break_label = previous_break_label;
+        current_continue_label = previous_continue_label;
         return nullptr;
     }
 
@@ -2474,6 +2524,8 @@ static std::unique_ptr<Module> module;
 // 即符号表
 Scope scope;
 
+static std::map<std::string, BasicBlock*> break_BB;
+
 void *LogErrorV(const char *Str) {
     printf("Code generation error: \n%s\n", Str);
     return nullptr;
@@ -2481,17 +2533,21 @@ void *LogErrorV(const char *Str) {
 
 class IR_CodeGenerator : public Visitor {
 
+    int auto_label_no_ir = 0;
+
 public:
     void IR_code_generate(AST_Node &tree);
 
     Value *visit(NumLiteral_AST_Node &node) override {
         switch (node.baseType) {
             case Ty_int:
-                return ConstantInt::get(context, APInt(32, std::stoi(node.literal)));
+                return ConstantInt::get(context, APInt(32, std::stoi(node.token.lexeme)));
             case Ty_bool:
-                return ConstantInt::get(context, APInt(1, std::stoi(node.literal)));
+                if (node.token.lexeme == "true")
+                    return ConstantInt::get(context, APInt(1, 1));
+                else return ConstantInt::get(context, APInt(1, 0));
             case Ty_float:
-                return ConstantFP::get(context, APFloat(std::stof(node.literal)));
+                return ConstantFP::get(context, APFloat(std::stof(node.token.lexeme)));
             default:
                 return nullptr;
         }
@@ -2511,29 +2567,29 @@ public:
          * 该地址在访问SingleVariableDeclaration_AST_Node时已经分配，并记录在符号表中，即scope.
          * 注意，对于数组（包括全局与局部），该地址是数组0号元素的地址*/
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.left);
-        Value *var = scope.find(v->var_name);
-        Value *value = node.right->accept(*this);
+        Value *varAddress = scope.find(v->var_name);
+        Value *varValue = node.right->accept(*this);
 
         if (node.type == Ty_array) { // 数组（包括全局与局部）
             Value* index = v->indexExpression->accept(*this);
-            Value *elemPtr = nullptr;
+            Value* elemPtr = nullptr;
             switch (node.baseType) {
                 case Ty_int:
-                    elemPtr = Builder.CreateGEP(Type::getInt32Ty(context), var, {index});
+                    elemPtr = Builder.CreateGEP(Type::getInt32Ty(context), varAddress, {index});
                     break;
                 case Ty_bool:
-                    elemPtr = Builder.CreateGEP(Type::getInt1Ty(context), var, {index});
+                    elemPtr = Builder.CreateGEP(Type::getInt1Ty(context), varAddress, {index});
                     break;
                 case Ty_float:
-                    elemPtr = Builder.CreateGEP(Type::getFloatTy(context), var, {index});
+                    elemPtr = Builder.CreateGEP(Type::getFloatTy(context), varAddress, {index});
                     break;
                 default:
                     break;
             }
-            Builder.CreateStore(value, elemPtr);
+            Builder.CreateStore(varValue, elemPtr);
         }
         else { // 非数组.
-            return Builder.CreateStore(value, var);
+            return Builder.CreateStore(varValue, varAddress);
         }
         return nullptr;
     }
@@ -2559,27 +2615,17 @@ public:
                 } else if (node.op == TK_DIV) {
                     return Builder.CreateSDiv(L, R, "dictmp");
                 } else if (node.op == TK_LT) {
-                    L = Builder.CreateICmpULT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateICmpULT(L, R, "booltmp");
                 } else if (node.op == TK_GT) {
-                    L = Builder.CreateICmpUGT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateICmpUGT(L, R, "booltmp");
                 } else if (node.op == TK_LE) {
-                    L = Builder.CreateICmpULE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateICmpULE(L, R, "booltmp");
                 } else if (node.op == TK_GE) {
-                    L = Builder.CreateICmpUGE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateICmpUGE(L, R, "booltmp");
                 } else if (node.op == TK_EQ) {
-                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(context));
-                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(context));
-                    L = Builder.CreateFCmpUEQ(LF, RF, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpUEQ(L, R, "booltmp");
                 } else if (node.op == TK_NE) {
-                    Value *LF = Builder.CreateSIToFP(L, Type::getFloatTy(context));
-                    Value *RF = Builder.CreateSIToFP(R, Type::getFloatTy(context));
-                    L = Builder.CreateFCmpUNE(LF, RF, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpUNE(L, R, "booltmp");
                 }
             } else if (lefttype == Type::getFloatTy(context)) {
                 if (node.op == TK_PLUS) {
@@ -2591,26 +2637,26 @@ public:
                 } else if (node.op == TK_DIV) {
                     return Builder.CreateFDiv(L, R, "dictmp");
                 } else if (node.op == TK_LT) {
-                    L = Builder.CreateFCmpULT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpULT(L, R, "booltmp");
                 } else if (node.op == TK_GT) {
-                    L = Builder.CreateFCmpUGT(L, R, "cmptemp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpUGT(L, R, "booltmp");
                 } else if (node.op == TK_LE) {
-                    L = Builder.CreateFCmpULE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpULE(L, R, "booltmp");
                 } else if (node.op == TK_GE) {
-                    L = Builder.CreateFCmpUGE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpUGE(L, R, "booltmp");
                 } else if (node.op == TK_EQ) {
-                    L = Builder.CreateFCmpUEQ(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpUEQ(L, R, "booltmp");
                 } else if (node.op == TK_NE) {
-                    L = Builder.CreateFCmpUNE(L, R, "cmptmp");
-                    return Builder.CreateUIToFP(L, Type::getDoubleTy(context), "booltmp");
+                    return Builder.CreateFCmpUNE(L, R, "booltmp");
+                }
+            } else {//if(lefttype == Type::getInt1Ty(context)){
+                if(node.op == TK_AND){
+                    return Builder.CreateAnd(L, R, "booltmp");
+                }
+                else if(node.op == TK_OR){
+                    return Builder.CreateOr(L, R, "booltmp");
                 }
             }
-
         }
         return nullptr;
     }
@@ -2642,10 +2688,10 @@ public:
         Function *func = Builder.GetInsertBlock()->getParent();
         IRBuilder<> TmpBuilder(&func->getEntryBlock(), func->getEntryBlock().begin());
         auto v = std::dynamic_pointer_cast<Variable_AST_Node>(node.varNode);
-        if (node.type == Ty_array) { // 局部变量是数组，创建ArrayType，分配数组空间.
-            Value *lArrayAlloc = nullptr;
+        AllocaInst* pAlloc = nullptr;
+        if (v->type == Ty_array) { // 局部变量是数组，创建ArrayType，分配数组空间.
             ArrayType* arrayType = nullptr;
-            switch (node.baseType) {
+            switch (v->baseType) {
                 case Ty_int:
                     arrayType = ArrayType::get(Type::getInt32Ty(context), node.inits.size());
                     break;
@@ -2658,12 +2704,11 @@ public:
                 default:
                     break;
             }
-            lArrayAlloc = TmpBuilder.CreateAlloca(arrayType);
-            scope.push(v->var_name, lArrayAlloc);
+            pAlloc = TmpBuilder.CreateAlloca(arrayType);
         } else { // 局部变量非数组
-            Type *type;
+            Type *type = nullptr;
             Value *value;
-            switch (node.baseType) {
+            switch (v->baseType) {
                 case Ty_int:
                     type = Type::getInt32Ty(context);
                     value = ConstantInt::get(context, APInt(32, 0));
@@ -2677,13 +2722,11 @@ public:
                     value = ConstantFP::get(context, APFloat(0.0));
                     break;
                 default:
-                    type = nullptr;
                     break;
             }
-
-            AllocaInst *allocation = TmpBuilder.CreateAlloca(type, nullptr, v->var_name);
-            scope.push(v->var_name, allocation);
+            pAlloc = TmpBuilder.CreateAlloca(type, nullptr, v->var_name);
         }
+        scope.push(v->var_name, pAlloc);
 
         for (auto &each: node.inits)
             each->accept(*this);
@@ -2698,39 +2741,27 @@ public:
     }
 
     Value *visit(Variable_AST_Node &node) override {
-        Value *var = scope.find(node.var_name);
-        Type *type;
+        Value *varPtr = scope.find(node.var_name);
+        Type *varType = nullptr;
         switch (node.baseType) {
             case Ty_int:
-                type = Type::getInt32Ty(context);
+                varType = Type::getInt32Ty(context);
                 break;
             case Ty_bool:
-                type = Type::getInt1Ty(context);
+                varType = Type::getInt1Ty(context);
                 break;
             case Ty_float:
-                type = Type::getFloatTy(context);
+                varType = Type::getFloatTy(context);
                 break;
             default:
-                type = nullptr;
                 break;
         }
-        if (node.type == Ty_array) {
+        if (node.type == Ty_array) { // 数组元素.
             Value* index = node.indexExpression->accept(*this);
-            Type *value_type = nullptr;
-            switch (node.baseType) {
-                case Ty_int:
-                    value_type =Type::getInt32Ty(context);
-                    break;
-                case Ty_float:
-                    value_type = Type::getFloatTy(context);
-                    break;
-                default:
-                    break;
-            }
-            Value *elemPtr = Builder.CreateGEP(value_type, var, {index});
-            return Builder.CreateLoad(value_type, elemPtr);
-        }
-        return Builder.CreateLoad(type, var, node.var_name);
+            Value *elemPtr = Builder.CreateGEP(varType, varPtr, {index});
+            return Builder.CreateLoad(varType, elemPtr);
+        } else  // 非数组元素.
+        return Builder.CreateLoad(varType, varPtr, node.var_name);
     }
 
     Value *visit(Block_AST_Node &node) override {
@@ -2747,61 +2778,83 @@ public:
         if (!condV) return nullptr;
         // 通过与0或0.0比较，确认将该值转换为bool类型的值.
         if (condV->getType() == Type::getInt1Ty(context)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(1, 0, false)), "ifcondition");
-        } else if (condV->getType() == Type::getInt32Ty(context)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(32, 0, false)), "ifcondition");
-        } else {
-            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(context, APFloat(0.0)), "ifcondition");
+//            condV = Builder.CreateICmpEQ(condV, ConstantInt::get(context, APInt(1, 0, false)), "ifcondition");
+            condV = Builder.CreateICmpEQ(condV, Builder.getInt1(true), "ifcondition");
+        }
+        BasicBlock* oldInsertionPoint = Builder.GetInsertBlock();
+        Function* func = oldInsertionPoint->getParent();
+
+        BasicBlock* afterBlock = BasicBlock::Create(context, "after-if", func );
+        BasicBlock* ifBlock = BasicBlock::Create(context, "then-block", func );
+        Builder.SetInsertPoint(ifBlock);
+        node.then_statement->accept(*this);
+        if (Builder.GetInsertBlock()->getTerminator() == nullptr ) Builder.CreateBr(afterBlock);
+        Builder.SetInsertPoint(oldInsertionPoint);
+
+        BasicBlock* elseBlock = nullptr;
+        if (node.else_statement != nullptr)
+        {
+            elseBlock = BasicBlock::Create(context, "else-block", func);
+            Builder.SetInsertPoint(elseBlock);
+            node.else_statement->accept(*this);
+            if (Builder.GetInsertBlock()->getTerminator() == nullptr) Builder.CreateBr(afterBlock);
+            Builder.SetInsertPoint(oldInsertionPoint);
         }
 
-        Function *func = Builder.GetInsertBlock()->getParent();
+//        Value* cond = m_LLVMValueTable.Get( stmt->condExpr() );
+        Builder.CreateCondBr(condV, ifBlock, (node.else_statement != nullptr) ? elseBlock : afterBlock);
 
-        if (node.else_statement != nullptr) { // 有else
-            auto trueBB = BasicBlock::Create(context, "if.then", func);
-            auto falseBB = BasicBlock::Create(context, "if.else", func);
-            // 创建after_ifBB基本块时，无需参数func，
-            // 因为尚不确定在上面两个基本块中是否有return指令.
-            // 若任性加上参数func，则与后面的after_ifBB->insertInto(TheFunction)冲突
-            // 程序出现异常.
-            auto after_ifBB = BasicBlock::Create(context, "after-if");
-            Builder.CreateCondBr(condV, trueBB, falseBB);
+        Builder.SetInsertPoint(afterBlock);
 
-            // trueBB
-            Builder.SetInsertPoint(trueBB);
-            node.then_statement->accept(*this); // 插入trueBB基本块的代码.
-            int insertedFlag = 0;
-            if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
-                after_ifBB->insertInto(func); // 确定插入after_ifBB.
-                insertedFlag = 1;                    // 设置标志，说明已确定插入
-                Builder.CreateBr(after_ifBB);        // 跳到after_ifBB基本块
-            }
+//        Function *func = Builder.GetInsertBlock()->getParent();
+//
+//        if (node.else_statement != nullptr) { // 有else
+//            auto trueBB = BasicBlock::Create(context, "if.then", func);
+//            auto falseBB = BasicBlock::Create(context, "if.else", func);
+//            // 创建after_ifBB基本块时，无需参数func，
+//            // 因为尚不确定在上面两个基本块中是否有return指令.
+//            // 若任性加上参数func，则与后面的after_ifBB->insertInto(TheFunction)冲突
+//            // 程序出现异常.
+//            auto after_ifBB = BasicBlock::Create(context, "after-if");
+//            Builder.CreateCondBr(condV, trueBB, falseBB);
+//
+//            // trueBB
+//            Builder.SetInsertPoint(trueBB);
+//            node.then_statement->accept(*this); // 插入trueBB基本块的代码.
+//            int insertedFlag = 0;
+//            if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
+//                after_ifBB->insertInto(func); // 确定插入after_ifBB.
+//                insertedFlag = 1;                    // 设置标志，说明已确定插入
+//                Builder.CreateBr(after_ifBB);        // 跳到after_ifBB基本块
+//            }
+//
+//            // falseBB
+//            Builder.SetInsertPoint(falseBB);
+//            node.else_statement->accept(*this); // 插入falseBB基本块的代码.
+//            if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
+//                if (!insertedFlag) {     // 若尚未决定是否插入after_ifBB.
+//                    after_ifBB->insertInto(func); // 确定插入after_ifBB.
+//                    insertedFlag = 1;                    // 设置标志，说明已确定插入.
+//                }
+//                Builder.CreateBr(after_ifBB); // 跳到after_ifBB基本块
+//            }
+//            // 在这里插入after_ifBB基本块代码.
+//            if (insertedFlag) Builder.SetInsertPoint(after_ifBB);
+//        } else {  // 没有else部分
+//            auto trueBranch = BasicBlock::Create(context, "trueBranch", func);
+//            auto after_ifBB = BasicBlock::Create(context, "after-if", func);
+//            Builder.CreateCondBr(condV, trueBranch, after_ifBB);
+//
+//            // trueBB
+//            Builder.SetInsertPoint(trueBranch);
+//            node.then_statement->accept(*this);
+//
+//            // after_ifBB
+//            if (Builder.GetInsertBlock()->getTerminator() == nullptr)
+//                Builder.CreateBr(after_ifBB); // not returned inside the block
+//            Builder.SetInsertPoint(after_ifBB);
+//        }
 
-            // falseBB
-            Builder.SetInsertPoint(falseBB);
-            node.else_statement->accept(*this); // 插入falseBB基本块的代码.
-            if (Builder.GetInsertBlock()->getTerminator() == nullptr) { // not returned inside the block
-                if (!insertedFlag) {     // 若尚未决定是否插入after_ifBB.
-                    after_ifBB->insertInto(func); // 确定插入after_ifBB.
-                    insertedFlag = 1;                    // 设置标志，说明已确定插入.
-                }
-                Builder.CreateBr(after_ifBB); // 跳到after_ifBB基本块
-            }
-            // 在这里插入after_ifBB基本块代码.
-            if (insertedFlag) Builder.SetInsertPoint(after_ifBB);
-        } else {  // 没有else部分
-            auto trueBranch = BasicBlock::Create(context, "trueBranch", func);
-            auto after_ifBB = BasicBlock::Create(context, "after-if", func);
-            Builder.CreateCondBr(condV, trueBranch, after_ifBB);
-
-            // trueBB
-            Builder.SetInsertPoint(trueBranch);
-            node.then_statement->accept(*this);
-
-            // after_ifBB
-            if (Builder.GetInsertBlock()->getTerminator() == nullptr)
-                Builder.CreateBr(after_ifBB); // not returned inside the block
-            Builder.SetInsertPoint(after_ifBB);
-        }
         return nullptr;
     }
 
@@ -2810,6 +2863,16 @@ public:
         BasicBlock *conditionBB = BasicBlock::Create(context, "while.condition", func);
         BasicBlock *whileBodyBB = BasicBlock::Create(context, "while.body", func);
         BasicBlock *afterWhileBB = BasicBlock::Create(context, "after.while", func);
+//        BasicBlock * previous_break_BB = current_break_BB;
+        auto_label_no_ir += 1;
+        std::string auto_label = std::to_string(auto_label_no_ir);
+        std::string previous_break_label = current_break_label;
+//        std::string previous_continue_label = current_continue_label;
+        current_break_label = "after.while" + auto_label;
+//        current_continue_label = ".L.condition." + auto_label;
+        break_BB.emplace(current_break_label, afterWhileBB);
+
+//        current_break_BB = afterWhileBB;
 
         if (Builder.GetInsertBlock()->getTerminator() == nullptr)
             Builder.CreateBr(conditionBB);
@@ -2840,10 +2903,61 @@ public:
         // Prepare to emit the code after while
         Builder.SetInsertPoint(afterWhileBB);
 
+//        current_break_BB = previous_break_BB;
+        current_break_label = previous_break_label;
+//        current_continue_label = previous_continue_label;
         return nullptr;
     }
 
     Value *visit(DoWhile_AST_Node &node) override {
+        Function *func = Builder.GetInsertBlock()->getParent();
+        BasicBlock *conditionBB = BasicBlock::Create(context, "dowhile.condition", func);
+        BasicBlock *doWhileBodyBB = BasicBlock::Create(context, "dowhile.body", func);
+        BasicBlock *afterDoWhileBB = BasicBlock::Create(context, "after.dowhile", func);
+
+
+//        std::cout << ".L.do." << auto_label << ":\n";
+
+        auto_label_no_ir += 1;
+        std::string auto_label = std::to_string(auto_label_no_ir);
+//        std::string previous_break_label = current_break_label;
+//        std::string previous_continue_label = current_continue_label;
+//        current_break_label = "after.dowhile" + auto_label;
+//        current_continue_label = ".L.condition." + auto_label;
+        break_BB.emplace("after.dowhile" + auto_label, afterDoWhileBB);
+
+
+        if (Builder.GetInsertBlock()->getTerminator() == nullptr)
+            Builder.CreateBr(doWhileBodyBB);
+
+        // Prepare to emit the condition of do-while
+        Builder.SetInsertPoint(conditionBB);
+        // Emit the code to compute the value of condition.
+        Value *condV = node.condition->accept(*this);
+        if (!condV)
+            return nullptr;
+        // condition的值可能是各种类型的值，通过与0或0.0比较，确认将其转换为bool类型的值.
+        if (condV->getType() == Type::getInt1Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(1, 0, false)), "dowhilecondition");
+        } else if (condV->getType() == Type::getInt32Ty(context)) {
+            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(32, 0, false)), "dowhilecondition");
+        } else {
+            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(context, APFloat(0.0)), "dowhilecondition");
+        }
+        Builder.CreateCondBr(condV, doWhileBodyBB, afterDoWhileBB);
+
+
+        // Prepare to emit the body of do-while
+        Builder.SetInsertPoint(doWhileBodyBB);
+        // Emit the body of do-while
+        node.statement->accept(*this);
+        if (Builder.GetInsertBlock()->getTerminator() == nullptr)
+            Builder.CreateBr(conditionBB);
+
+        // Prepare to emit the code after while
+        Builder.SetInsertPoint(afterDoWhileBB);
+
+//        current_break_label = previous_break_label;
         return nullptr;
     }
 
@@ -2852,7 +2966,7 @@ public:
         BasicBlock *conditionBB = BasicBlock::Create(context, "for.condition", func);
         BasicBlock *forBodyBB = BasicBlock::Create(context, "for.body", func);
         BasicBlock *afterForBB = BasicBlock::Create(context, "after.for", func);
-
+//        current_break_BB = afterForBB;
         // Emit the part of initialization
         node.initialization->accept(*this);
 
@@ -2867,12 +2981,9 @@ public:
             return nullptr;
         // condition的值可能是各种类型的值，通过与0或0.0比较，确认将其转换为bool类型的值.
         if (condV->getType() == Type::getInt1Ty(context)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(1, 0, false)), "forcondition");
-        } else if (condV->getType() == Type::getInt32Ty(context)) {
-            condV = Builder.CreateICmpNE(condV, ConstantInt::get(context, APInt(32, 0, false)), "forcondition");
-        } else {
-            condV = Builder.CreateFCmpONE(condV, ConstantFP::get(context, APFloat(0.0)), "forcondition");
+            condV = Builder.CreateICmpEQ(condV, Builder.getInt1(true), "forcondition");
         }
+
         Builder.CreateCondBr(condV, forBodyBB, afterForBB);
 
         // Prepare to emit the body of for
@@ -2892,6 +3003,7 @@ public:
     }
 
     Value *visit(Break_AST_Node &node) override {
+        Builder.CreateBr(break_BB.find(current_break_label)->second);
         return nullptr;
     }
 
@@ -2910,10 +3022,10 @@ public:
         Constant *formatStr = nullptr;
         switch (node.value->baseType) {
             case Ty_int:
-                formatStr = Builder.CreateGlobalStringPtr("%d\n");
+                formatStr = Builder.CreateGlobalStringPtr("%d  ");
                 break;
             case Ty_float:
-                formatStr = Builder.CreateGlobalStringPtr("%0.2f\n");
+                formatStr = Builder.CreateGlobalStringPtr("%0.2f  ");
                 //必须将float转成double类型
                 element = Builder.CreateFPExt(element, Type::getDoubleTy(context));
                 break;
@@ -2922,7 +3034,6 @@ public:
         }
 
         Builder.CreateCall(printf_func, {formatStr, element});
-
         return nullptr;
     }
 
@@ -2937,7 +3048,7 @@ public:
                 funargs.push_back(argValue);
             }
 
-            return Builder.CreateCall(callerFunc, funargs, "calltmp");
+            return Builder.CreateCall(callerFunc, funargs);
         }
         return nullptr;
     }
@@ -3055,7 +3166,7 @@ public:
 
 
         Value *returner = node.funcBlock->accept(*this);
-        // 注意到这里用了llvm::verifyFunction, 它的作用是检查我们创建的函数是否正确，确保它是符合LLVM IR规范的。
+        // 注意到这里用了verifyFunction, 它的作用是检查我们创建的函数是否正确，确保它是符合LLVM IR规范的。
         verifyFunction(*f);
 
         scope.exit();  // exist current function scope
@@ -3115,7 +3226,6 @@ public:
                         break;
                     }
                     case Ty_bool: {
-                        ConstantAggregateZero *zeroNum = ConstantAggregateZero::get(Type::getInt1Ty(context));
                         gdAlloc = new GlobalVariable(*module, Type::getInt1Ty(context), false,
                                                           GlobalVariable::LinkageTypes::ExternalLinkage,
                                                           ConstantInt::get(context,
